@@ -31,6 +31,7 @@ pub const Node = union(enum) {
             inline else => |n| n.speak(),
         }
     }
+
     pub fn isLeaf(node: Node) bool {
         switch (node) {
             .leafNode => {
@@ -43,6 +44,13 @@ pub const Node = union(enum) {
     }
 };
 
+fn compare(context: void, a: u32, b: u32) std.math.Order {
+    _ = context;
+    return std.math.order(a, b);
+}
+
+pub const Heap = std.PriorityQueue(u32, void, compare);
+
 test "nodetest" {
     const leafNode = Node{ .leafNode = .{ .freq = 0, .charValue = 'a' } };
     const nonLeafNode = Node{ .nonLeafNode = .{ .freq = 0, .left = undefined, .right = undefined } };
@@ -52,4 +60,19 @@ test "nodetest" {
 
     try std.testing.expect(leafNode.isLeaf());
     try std.testing.expect(!nonLeafNode.isLeaf());
+}
+
+test "heaptest" {
+    var heap = Heap.init(std.testing.allocator, {});
+    defer heap.deinit();
+
+    try heap.add(69);
+    try heap.add(10);
+    try heap.add(9);
+    try heap.add(8);
+
+    try std.testing.expectEqual(8, heap.remove());
+    try std.testing.expectEqual(9, heap.remove());
+    try std.testing.expectEqual(10, heap.remove());
+    try std.testing.expectEqual(69, heap.remove());
 }
