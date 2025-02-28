@@ -1,5 +1,6 @@
 const std = @import("std");
 const print = std.debug.print;
+const Node = @import("types.zig").Node;
 
 const HuffmanError = error{MemoryError};
 
@@ -11,16 +12,16 @@ fn printMap(map: *std.AutoHashMap(u8, u32)) void {
     }
 }
 fn processBook(allocator: std.mem.Allocator, book: []u8) !void {
-    var map = std.AutoHashMap(u8, u32).init(allocator);
-    defer map.deinit();
+    var frequencyMap = std.AutoHashMap(u8, u32).init(allocator);
+    defer frequencyMap.deinit();
     for (book) |ch| {
-        if (map.get(ch)) |count| {
-            try map.put(ch, count + 1);
+        if (frequencyMap.get(ch)) |count| {
+            try frequencyMap.put(ch, count + 1);
         } else {
-            try map.put(ch, 1);
+            try frequencyMap.put(ch, 1);
         }
     }
-    printMap(&map);
+    printMap(&frequencyMap);
 }
 
 pub fn main() !void {}
