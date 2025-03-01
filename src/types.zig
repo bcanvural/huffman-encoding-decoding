@@ -43,13 +43,14 @@ pub const Node = union(enum) {
         }
     }
 };
+pub const Entry = std.AutoHashMap(u8, u32).Entry;
 
-fn compare(context: void, a: u32, b: u32) std.math.Order {
+fn compare(context: void, a: *Entry, b: *Entry) std.math.Order {
     _ = context;
-    return std.math.order(a, b);
+    return std.math.order(a.*.value_ptr.*, b.*.value_ptr.*);
 }
 
-pub const Heap = std.PriorityQueue(u32, void, compare);
+pub const Heap = std.PriorityQueue(*Entry, void, compare);
 
 test "nodetest" {
     const leafNode = Node{ .leafNode = .{ .freq = 0, .charValue = 'a' } };
@@ -66,13 +67,18 @@ test "heaptest" {
     var heap = Heap.init(std.testing.allocator, {});
     defer heap.deinit();
 
-    try heap.add(69);
-    try heap.add(10);
-    try heap.add(9);
-    try heap.add(8);
+    var values = [_]u32{ 69, 10, 9, 8 };
+    var entries: [values.len]Entry = undefined;
+    for (0..values.len) |idx| {
+        entries[idx] = Entry{ .key_ptr = undefined, .value_ptr = &values[idx] };
+        try heap.add(&entries[idx]);
+    }
+    for (heap.items) |item| {
+        print("item: {d}\n", .{item.value_ptr.*});
+    }
 
-    try std.testing.expectEqual(8, heap.remove());
-    try std.testing.expectEqual(9, heap.remove());
-    try std.testing.expectEqual(10, heap.remove());
-    try std.testing.expectEqual(69, heap.remove());
+    try std.testing.expectEqual(8, heap.remove().*.value_ptr.*);
+    try std.testing.expectEqual(9, heap.remove().*.value_ptr.*);
+    try std.testing.expectEqual(10, heap.remove().*.value_ptr.*);
+    try std.testing.expectEqual(69, heap.remove().*.value_ptr.*);
 }
