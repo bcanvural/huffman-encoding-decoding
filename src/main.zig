@@ -2,6 +2,7 @@ const std = @import("std");
 const print = std.debug.print;
 const Node = @import("types.zig").Node;
 const Heap = @import("types.zig").Heap;
+const KV = @import("types.zig").KV;
 
 const HuffmanError = error{MemoryError};
 
@@ -16,29 +17,32 @@ fn processBook(allocator: std.mem.Allocator, book: []u8) !void {
     var frequencyMap = std.AutoHashMap(u8, u32).init(allocator);
     defer frequencyMap.deinit();
     for (book) |ch| {
-        if (frequencyMap.get(ch)) |count| {
-            try frequencyMap.put(ch, count + 1);
+        const entry = try frequencyMap.getOrPut(ch);
+        if (entry.found_existing) {
+            entry.value_ptr.* += 1;
         } else {
-            try frequencyMap.put(ch, 1);
+            entry.value_ptr.* = 1;
         }
     }
     // printMap(&frequencyMap);
     var heap = try buildPriorityQueue(allocator, &frequencyMap);
     defer heap.deinit();
-    var it = heap.iterator();
-    while (it.next()) |item| {
-        print("key: {c}, value: {d}", .{ item.key_ptr.*, item.value_ptr.* });
+    while (heap.removeOrNull()) |item| {
+        print("key: {c}, value: {d}\n", .{ item.key, item.value });
     }
 }
 
 //it's caller's responsibility to free the heap
-inline fn buildPriorityQueue(allocator: std.mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u32)) !*Heap {
-    var it = frequencyMap.iterator();
+fn buildPriorityQueue(allocator: std.mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u32)) !Heap {
     var heap = Heap.init(allocator, {});
+    var it = frequencyMap.iterator();
     while (it.next()) |entry| {
-        try heap.add(&entry);
+        try heap.add(KV{
+            .key = entry.key_ptr.*,
+            .value = entry.value_ptr.*,
+        });
     }
-    return &heap;
+    return heap;
 }
 
 pub fn main() !void {}

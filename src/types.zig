@@ -43,14 +43,17 @@ pub const Node = union(enum) {
         }
     }
 };
-pub const Entry = std.AutoHashMap(u8, u32).Entry;
+pub const KV = struct {
+    key: u8,
+    value: u32,
+};
 
-fn compare(context: void, a: *Entry, b: *Entry) std.math.Order {
+fn compare(context: void, a: KV, b: KV) std.math.Order {
     _ = context;
-    return std.math.order(a.*.value_ptr.*, b.*.value_ptr.*);
+    return std.math.order(a.value, b.value);
 }
 
-pub const Heap = std.PriorityQueue(*Entry, void, compare);
+pub const Heap = std.PriorityQueue(KV, void, compare);
 
 test "nodetest" {
     const leafNode = Node{ .leafNode = .{ .freq = 0, .charValue = 'a' } };
@@ -67,18 +70,18 @@ test "heaptest" {
     var heap = Heap.init(std.testing.allocator, {});
     defer heap.deinit();
 
-    var values = [_]u32{ 69, 10, 9, 8 };
-    var entries: [values.len]Entry = undefined;
+    const values = [_]u32{ 69, 10, 9, 8 };
+    var kvs: [values.len]KV = undefined;
     for (0..values.len) |idx| {
-        entries[idx] = Entry{ .key_ptr = undefined, .value_ptr = &values[idx] };
-        try heap.add(&entries[idx]);
+        kvs[idx] = KV{ .key = undefined, .value = values[idx] };
+        try heap.add(kvs[idx]);
     }
     for (heap.items) |item| {
-        print("item: {d}\n", .{item.value_ptr.*});
+        print("item: {d}\n", .{item.value});
     }
 
-    try std.testing.expectEqual(8, heap.remove().*.value_ptr.*);
-    try std.testing.expectEqual(9, heap.remove().*.value_ptr.*);
-    try std.testing.expectEqual(10, heap.remove().*.value_ptr.*);
-    try std.testing.expectEqual(69, heap.remove().*.value_ptr.*);
+    try std.testing.expectEqual(8, heap.remove().value);
+    try std.testing.expectEqual(9, heap.remove().value);
+    try std.testing.expectEqual(10, heap.remove().value);
+    try std.testing.expectEqual(69, heap.remove().value);
 }
