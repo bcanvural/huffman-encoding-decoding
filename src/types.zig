@@ -34,6 +34,17 @@ pub const Node = union(enum) {
         }
     }
 
+    pub fn getFreq(node: Node) u32 {
+        switch (node) {
+            .leafNode => {
+                return node.leafNode.freq;
+            },
+            .nonLeafNode => {
+                return node.nonLeafNode.freq;
+            },
+        }
+    }
+
     pub fn isLeaf(node: Node) bool {
         switch (node) {
             .leafNode => {
@@ -44,21 +55,30 @@ pub const Node = union(enum) {
             },
         }
     }
+
+    pub fn printSubtree(node: Node) void {
+        switch (node) {
+            .leafNode => node.leafNode.printInfo(),
+            .nonLeafNode => {
+                node.nonLeafNode.printInfo();
+                printSubtree(node.nonLeafNode.left.*);
+                printSubtree(node.nonLeafNode.right.*);
+            },
+        }
+    }
 };
 
 fn compare(context: void, a: *Node, b: *Node) std.math.Order {
     _ = context;
     var a_freq: u32 = undefined;
     var b_freq: u32 = undefined;
-    if (a.isLeaf()) {
-        a_freq = a.leafNode.freq;
-    } else {
-        a_freq = a.nonLeafNode.freq;
+    switch (a.*) {
+        .leafNode => a_freq = a.leafNode.freq,
+        .nonLeafNode => a_freq = a.nonLeafNode.freq,
     }
-    if (b.isLeaf()) {
-        b_freq = b.leafNode.freq;
-    } else {
-        b_freq = b.nonLeafNode.freq;
+    switch (b.*) {
+        .leafNode => b_freq = b.leafNode.freq,
+        .nonLeafNode => b_freq = b.nonLeafNode.freq,
     }
     return std.math.order(a_freq, b_freq);
 }
