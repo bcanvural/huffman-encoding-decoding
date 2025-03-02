@@ -2,9 +2,8 @@ const std = @import("std");
 const print = std.debug.print;
 const Node = @import("types.zig").Node;
 const Heap = @import("types.zig").Heap;
-const KV = @import("types.zig").KV;
 
-const HuffmanError = error{MemoryError};
+const HuffmanError = error{EmptyHeap};
 
 fn printMap(map: *std.AutoHashMap(u8, u32)) void {
     print("KEY | VALUE\n", .{});
@@ -24,23 +23,31 @@ fn processBook(allocator: std.mem.Allocator, book: []u8) !void {
             entry.value_ptr.* = 1;
         }
     }
-    // printMap(&frequencyMap);
-    var heap = try buildPriorityQueue(allocator, &frequencyMap);
+
+    const nodesPtr = try allocator.alloc(Node, frequencyMap.count());
+    defer allocator.free(nodesPtr);
+
+    var heap = try buildHeap(allocator, &frequencyMap, nodesPtr);
     defer heap.deinit();
     while (heap.removeOrNull()) |item| {
-        print("key: {c}, value: {d}\n", .{ item.key, item.value });
+        item.printInfo();
     }
+    //build the huffman tree from heap
+    //while heap doesnt have only 1 node remaining, do:
+    //  pop 2 item from heap and merge them under non-leaf node, add the non-leaf node back to heap
+    //end
+
 }
 
 //it's caller's responsibility to free the heap
-fn buildPriorityQueue(allocator: std.mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u32)) !Heap {
+//caller is managing the lifetime of the nodes
+fn buildHeap(allocator: std.mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u32), nodesPtr: []Node) !Heap {
     var heap = Heap.init(allocator, {});
     var it = frequencyMap.iterator();
-    while (it.next()) |entry| {
-        try heap.add(KV{
-            .key = entry.key_ptr.*,
-            .value = entry.value_ptr.*,
-        });
+    var idx: usize = 0;
+    while (it.next()) |entry| : (idx += 1) {
+        nodesPtr[idx] = Node{ .leafNode = .{ .charValue = entry.key_ptr.*, .freq = entry.value_ptr.* } };
+        try heap.add(&nodesPtr[idx]);
     }
     return heap;
 }
@@ -55,3 +62,19 @@ test "file_test" {
     defer ally.free(book);
     try processBook(ally, book);
 }
+
+//dont think encoding matters
+// test "encoding_test" {
+//     print("------------\n", .{});
+//     const file = try std.fs.cwd().openFile("tests/book.txt", .{});
+//     const ally = std.testing.allocator;
+//     const raw_bytes = try file.reader().readAllAlloc(ally, 10000000);
+//     defer ally.free(raw_bytes);
+//     var codepoints = std.ArrayList(u32).init(ally);
+//     defer codepoints.deinit();
+//
+//     var utf8 = (try std.unicode.Utf8View.init(raw_bytes)).iterator();
+//     while (utf8.nextCodepointSlice()) |codepoint| {
+//         std.debug.print("got codepoint {s}\n", .{codepoint});
+//     }
+// }
