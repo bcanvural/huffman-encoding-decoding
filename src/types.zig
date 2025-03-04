@@ -57,12 +57,20 @@ pub const Node = union(enum) {
     }
 
     pub fn printSubtree(node: Node) void {
+        printSubtreeWithLevel(node, 0);
+    }
+
+    fn printSubtreeWithLevel(node: Node, level: i32) void {
         switch (node) {
-            .leafNode => node.leafNode.printInfo(),
+            .leafNode => {
+                print("Level: {d}\n", .{level});
+                node.leafNode.printInfo();
+            },
             .nonLeafNode => {
+                print("Level: {d}\n", .{level});
                 node.nonLeafNode.printInfo();
-                printSubtree(node.nonLeafNode.left.*);
-                printSubtree(node.nonLeafNode.right.*);
+                printSubtreeWithLevel(node.nonLeafNode.left.*, level + 1);
+                printSubtreeWithLevel(node.nonLeafNode.right.*, level + 1);
             },
         }
     }
