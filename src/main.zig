@@ -6,6 +6,9 @@ const Heap = @import("types.zig").Heap;
 const HuffmanError = error{
     EmptyBytes,
     EmptyHeap,
+    MissingFileNameError,
+    EmptyFileError,
+    InvalidFileNameError,
 };
 
 fn printMap(map: *std.AutoHashMap(u8, u32)) void {
@@ -98,7 +101,56 @@ fn buildHeap(allocator: std.mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u3
     return heap;
 }
 
-pub fn main() !void {}
+fn openFile(filename: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
+    if (!std.mem.startsWith(u8, filename, "/")) {
+        return try std.fs.cwd().openFile(filename, flags);
+    } else {
+        return try std.fs.openFileAbsolute(filename, flags);
+    }
+}
+
+fn processArgs(args: [][]u8) ![]u8 {
+    if (args.len < 2) {
+        return HuffmanError.MissingFileNameError;
+    }
+    const filename = args[1];
+    if (filename.len == 0) {
+        return HuffmanError.InvalidFileNameError;
+    }
+    const file = try openFile(filename, .{ .mode = .read_only });
+    defer file.close();
+    const stat = try file.stat();
+    if (stat.size == 0) {
+        return HuffmanError.EmptyFileError;
+    }
+    return filename;
+}
+
+pub fn main() !void {
+    const allocator = std.heap.page_allocator;
+    const args = try std.process.argsAlloc(std.heap.page_allocator);
+    defer std.process.argsFree(allocator, args);
+    const filename = try processArgs(args);
+    print("Processing {s}...\n", .{filename});
+}
+
+test "processargs" {
+    const allocator = std.testing.allocator;
+    //printing pwd for debugging
+    const pwd: []u8 = try allocator.alloc(u8, 100);
+    defer allocator.free(pwd);
+    _ = try std.fs.cwd().realpath(".", pwd);
+    //
+    print("pwd: {s}\n", .{pwd});
+    var fakeArgs = [_][]u8{
+        try allocator.dupe(u8, "huffman-encoding-decoding"),
+        try allocator.dupe(u8, "tests/book.txt"),
+    };
+    defer allocator.free(fakeArgs[0]);
+    defer allocator.free(fakeArgs[1]);
+    const filename = try processArgs(&fakeArgs);
+    try std.testing.expectEqualStrings("tests/book.txt", filename);
+}
 
 test "build frequency map" {
     var bytes = [_]u8{ 'a', 'b', 'c', 'a' };
