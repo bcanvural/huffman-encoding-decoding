@@ -93,7 +93,7 @@ fn buildHeap(allocator: std.mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u3
     var idx: usize = 0;
     while (it.next()) |entry| : (idx += 1) {
         nodesPtr[idx] = Node{ .leafNode = .{ .charValue = entry.key_ptr.*, .freq = entry.value_ptr.* } };
-        try heap.add(&nodesPtr[idx]);
+        try heap.add(&nodesPtr[idx]); //we write the address within the array, array is what survives!
     }
     return heap;
 }
@@ -125,7 +125,7 @@ test "small_heap" {
         try std.testing.expectEqual(expectedValues[idx], item.*.leafNode.charValue);
     }
 }
-//todo debug
+
 test "huffman tree test" {
     var allocator = std.testing.allocator;
     var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b' };
@@ -135,6 +135,32 @@ test "huffman tree test" {
     defer allocator.free(nodesPtr);
     var heap = try buildHeap(std.testing.allocator, &freqMap, nodesPtr);
     defer heap.deinit();
+    const nonLeafNodesPtr = try allocator.alloc(Node, freqMap.count() - 1);
+    const root = try buildHuffmanTree(&heap, nonLeafNodesPtr);
+    defer allocator.free(nonLeafNodesPtr);
+    root.printSubtree();
+}
+
+test "ui example test" {
+    var allocator = std.testing.allocator;
+
+    var freqMap = std.AutoHashMap(u8, u32).init(allocator);
+    defer freqMap.deinit();
+    try freqMap.put('C', 32);
+    try freqMap.put('D', 42);
+    try freqMap.put('E', 120);
+    try freqMap.put('K', 7);
+    try freqMap.put('L', 42);
+    try freqMap.put('M', 24);
+    try freqMap.put('U', 37);
+    try freqMap.put('Z', 2);
+
+    const nodesPtr = try allocator.alloc(Node, freqMap.count());
+    defer allocator.free(nodesPtr);
+
+    var heap = try buildHeap(allocator, &freqMap, nodesPtr);
+    defer heap.deinit();
+
     const nonLeafNodesPtr = try allocator.alloc(Node, freqMap.count() - 1);
     const root = try buildHuffmanTree(&heap, nonLeafNodesPtr);
     defer allocator.free(nonLeafNodesPtr);
