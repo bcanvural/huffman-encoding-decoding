@@ -1,7 +1,10 @@
 const std = @import("std");
+const mem = std.mem;
+const fs = std.fs;
 const print = std.debug.print;
 const Node = @import("types.zig").Node;
 const Heap = @import("types.zig").Heap;
+const HuffmanTree = @import("types.zig").HuffmanTree;
 
 const HuffmanError = error{
     EmptyBytes,
@@ -18,7 +21,7 @@ fn printMap(map: *std.AutoHashMap(u8, u32)) void {
         print("{c} | {d}\n", .{ k.key_ptr.*, k.value_ptr.* });
     }
 }
-fn processBytes(allocator: std.mem.Allocator, bytes: []u8) !void {
+fn processBytes(allocator: mem.Allocator, bytes: []u8) !void {
     var frequencyMap = try buildFrequencyMap(allocator, bytes);
     defer frequencyMap.deinit();
 
@@ -28,28 +31,12 @@ fn processBytes(allocator: std.mem.Allocator, bytes: []u8) !void {
     var heap = try buildHeap(allocator, &frequencyMap, nodesPtr);
     defer heap.deinit();
 
-    var root: *Node = undefined;
-    if (frequencyMap.count() == 1) {
-        var it = frequencyMap.iterator();
-        while (it.next()) |e| {
-            root = try allocator.create(Node);
-            root.* = Node{ .leafNode = .{
-                .charValue = e.key_ptr.*,
-                .freq = e.value_ptr.*,
-            } };
-            break;
-        }
-        defer allocator.destroy(root);
-        root.printSubtree();
-    } else {
-        const nonLeafNodesPtr = try allocator.alloc(Node, frequencyMap.count() - 1);
-        root = try buildHuffmanTree(&heap, nonLeafNodesPtr);
-        defer allocator.free(nonLeafNodesPtr);
-        root.printSubtree();
-    }
+    const ht = try buildHuffmanTree(allocator, &heap);
+    defer ht.deinit();
+    ht.root.printSubtree();
 }
 
-fn buildFrequencyMap(allocator: std.mem.Allocator, bytes: []u8) !std.AutoHashMap(u8, u32) {
+fn buildFrequencyMap(allocator: mem.Allocator, bytes: []u8) !std.AutoHashMap(u8, u32) {
     var frequencyMap = std.AutoHashMap(u8, u32).init(allocator);
     for (bytes) |ch| {
         const entry = try frequencyMap.getOrPut(ch);
@@ -61,36 +48,59 @@ fn buildFrequencyMap(allocator: std.mem.Allocator, bytes: []u8) !std.AutoHashMap
     }
     return frequencyMap;
 }
+
 //build the huffman tree from heap
 //while heap doesnt have only 1 node remaining, do:
 //  pop 2 item from heap and connect them under non-leaf node whose freq is sum of its children
 //  add the new non-leaf node back to heap
 //end
 //
-//any created non-leaf nodes are saved in nonLeafNodesPtr, caller's responsible for freeing those
-fn buildHuffmanTree(heap: *Heap, nonLeafNodesPtr: []Node) !*Node {
+fn buildHuffmanTree(allocator: mem.Allocator, heap: *Heap) !HuffmanTree {
     if (heap.count() == 0) {
         return HuffmanError.EmptyHeap; //shouldn't happen actually
     }
-
-    var idx: usize = 0;
-    while (heap.count() > 1) : (idx += 1) {
-        const n1 = heap.removeOrNull().?; //we already checked in while clause
-        const n2 = heap.removeOrNull().?; //we already checked in while clause
-        const newNode: Node = Node{ .nonLeafNode = .{
-            .freq = n1.getFreq() + n2.getFreq(),
-            .left = n1,
-            .right = n2,
-        } };
-        nonLeafNodesPtr[idx] = newNode;
-        try heap.add(&nonLeafNodesPtr[idx]); //only array survives, program stack is gg after function call
+    var nodesSize: usize = heap.count() - 1;
+    if (nodesSize == 0) {
+        nodesSize = 1;
     }
-    return heap.removeOrNull().?; //already checked
+    var nodes = try allocator.alloc(Node, nodesSize);
+    if (nodesSize == 1) {
+        const node = heap.removeOrNull().?;
+        nodes[0] = Node{
+            .leafNode = .{
+                .charValue = node.leafNode.charValue, //for sure it's leaf
+                .freq = node.leafNode.freq,
+            },
+        };
+        return HuffmanTree{
+            .nodes = nodes,
+            .root = &nodes[0],
+            .allocator = allocator,
+        };
+    } else {
+        var idx: usize = 0;
+        while (heap.count() > 1) : (idx += 1) {
+            const n1 = heap.removeOrNull().?; //we already checked in while clause
+            const n2 = heap.removeOrNull().?; //we already checked in while clause
+            const newNode: Node = Node{ .nonLeafNode = .{
+                .freq = n1.getFreq() + n2.getFreq(),
+                .left = n1,
+                .right = n2,
+            } };
+            nodes[idx] = newNode;
+            try heap.add(&nodes[idx]); //only array survives, program stack is gg after function call
+        }
+        return HuffmanTree{
+            .nodes = nodes,
+            .root = heap.removeOrNull().?, //we already checked
+            .allocator = allocator,
+        };
+    }
 }
 
 //it's caller's responsibility to free the heap
 //caller is managing the lifetime of the nodes
-fn buildHeap(allocator: std.mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u32), nodesPtr: []Node) !Heap {
+fn buildHeap(allocator: mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u32), nodesPtr: []Node) !Heap {
     var heap = Heap.init(allocator, {});
     var it = frequencyMap.iterator();
     var idx: usize = 0;
@@ -101,11 +111,11 @@ fn buildHeap(allocator: std.mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u3
     return heap;
 }
 
-fn openFile(filename: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
+fn openFile(filename: []const u8, flags: fs.File.OpenFlags) !fs.File {
     if (!std.mem.startsWith(u8, filename, "/")) {
-        return try std.fs.cwd().openFile(filename, flags);
+        return try fs.cwd().openFile(filename, flags);
     } else {
-        return try std.fs.openFileAbsolute(filename, flags);
+        return try fs.openFileAbsolute(filename, flags);
     }
 }
 
@@ -139,7 +149,7 @@ test "processargs" {
     //printing pwd for debugging
     const pwd: []u8 = try allocator.alloc(u8, 100);
     defer allocator.free(pwd);
-    _ = try std.fs.cwd().realpath(".", pwd);
+    _ = try fs.cwd().realpath(".", pwd);
     //
     print("pwd: {s}\n", .{pwd});
     var fakeArgs = [_][]u8{
@@ -187,10 +197,9 @@ test "huffman tree test" {
     defer allocator.free(nodesPtr);
     var heap = try buildHeap(std.testing.allocator, &freqMap, nodesPtr);
     defer heap.deinit();
-    const nonLeafNodesPtr = try allocator.alloc(Node, freqMap.count() - 1);
-    const root = try buildHuffmanTree(&heap, nonLeafNodesPtr);
-    defer allocator.free(nonLeafNodesPtr);
-    root.printSubtree();
+    const ht = try buildHuffmanTree(allocator, &heap);
+    defer ht.deinit();
+    ht.root.printSubtree();
 }
 
 test "ui example test" {
@@ -213,15 +222,14 @@ test "ui example test" {
     var heap = try buildHeap(allocator, &freqMap, nodesPtr);
     defer heap.deinit();
 
-    const nonLeafNodesPtr = try allocator.alloc(Node, freqMap.count() - 1);
-    const root = try buildHuffmanTree(&heap, nonLeafNodesPtr);
-    defer allocator.free(nonLeafNodesPtr);
-    root.printSubtree();
+    const ht = try buildHuffmanTree(allocator, &heap);
+    defer ht.deinit();
+    ht.root.printSubtree();
 }
 
 test "file_test" {
     print("------------\n", .{});
-    const file = try std.fs.cwd().openFile("tests/book.txt", .{});
+    const file = try fs.cwd().openFile("tests/book.txt", .{});
     const ally = std.testing.allocator;
     const book = try file.reader().readAllAlloc(ally, 10000000);
     defer ally.free(book);

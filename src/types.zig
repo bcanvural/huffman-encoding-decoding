@@ -1,5 +1,6 @@
 const std = @import("std");
 const print = std.debug.print;
+const mem = std.mem;
 
 pub const Node = union(enum) {
     leafNode: LeafNode,
@@ -92,6 +93,15 @@ fn compare(context: void, a: *Node, b: *Node) std.math.Order {
 }
 
 pub const Heap = std.PriorityQueue(*Node, void, compare);
+
+pub const HuffmanTree = struct {
+    root: *Node,
+    nodes: []Node,
+    allocator: mem.Allocator,
+    pub fn deinit(self: HuffmanTree) void {
+        self.allocator.free(self.nodes);
+    }
+};
 
 test "nodetest" {
     const leafNode = Node{ .leafNode = .{ .freq = 0, .charValue = 'a' } };
