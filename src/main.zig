@@ -5,14 +5,7 @@ const print = std.debug.print;
 const Node = @import("types.zig").Node;
 const Heap = @import("types.zig").Heap;
 const HuffmanTree = @import("types.zig").HuffmanTree;
-
-const HuffmanError = error{
-    EmptyBytes,
-    EmptyHeap,
-    MissingFileNameError,
-    EmptyFileError,
-    InvalidFileNameError,
-};
+const HuffmanError = @import("types.zig").HuffmanError;
 
 fn printMap(map: *std.AutoHashMap(u8, u32)) void {
     print("KEY | VALUE\n", .{});
@@ -21,17 +14,15 @@ fn printMap(map: *std.AutoHashMap(u8, u32)) void {
         print("{c} | {d}\n", .{ k.key_ptr.*, k.value_ptr.* });
     }
 }
+
 fn processBytes(allocator: mem.Allocator, bytes: []u8) !void {
     var frequencyMap = try buildFrequencyMap(allocator, bytes);
     defer frequencyMap.deinit();
 
-    const nodesPtr = try allocator.alloc(Node, frequencyMap.count());
-    defer allocator.free(nodesPtr);
-
-    var heap = try buildHeap(allocator, &frequencyMap, nodesPtr);
+    var heap = try Heap.init(allocator, &frequencyMap);
     defer heap.deinit();
 
-    const ht = try buildHuffmanTree(allocator, &heap);
+    const ht = try HuffmanTree.init(allocator, &heap);
     defer ht.deinit();
     ht.root.printSubtree();
 }
@@ -47,68 +38,6 @@ fn buildFrequencyMap(allocator: mem.Allocator, bytes: []u8) !std.AutoHashMap(u8,
         }
     }
     return frequencyMap;
-}
-
-//build the huffman tree from heap
-//while heap doesnt have only 1 node remaining, do:
-//  pop 2 item from heap and connect them under non-leaf node whose freq is sum of its children
-//  add the new non-leaf node back to heap
-//end
-//
-fn buildHuffmanTree(allocator: mem.Allocator, heap: *Heap) !HuffmanTree {
-    if (heap.count() == 0) {
-        return HuffmanError.EmptyHeap; //shouldn't happen actually
-    }
-    var nodesSize: usize = heap.count() - 1;
-    if (nodesSize == 0) {
-        nodesSize = 1;
-    }
-    var nodes = try allocator.alloc(Node, nodesSize);
-    if (nodesSize == 1) {
-        const node = heap.removeOrNull().?;
-        nodes[0] = Node{
-            .leafNode = .{
-                .charValue = node.leafNode.charValue, //for sure it's leaf
-                .freq = node.leafNode.freq,
-            },
-        };
-        return HuffmanTree{
-            .nodes = nodes,
-            .root = &nodes[0],
-            .allocator = allocator,
-        };
-    } else {
-        var idx: usize = 0;
-        while (heap.count() > 1) : (idx += 1) {
-            const n1 = heap.removeOrNull().?; //we already checked in while clause
-            const n2 = heap.removeOrNull().?; //we already checked in while clause
-            const newNode: Node = Node{ .nonLeafNode = .{
-                .freq = n1.getFreq() + n2.getFreq(),
-                .left = n1,
-                .right = n2,
-            } };
-            nodes[idx] = newNode;
-            try heap.add(&nodes[idx]); //only array survives, program stack is gg after function call
-        }
-        return HuffmanTree{
-            .nodes = nodes,
-            .root = heap.removeOrNull().?, //we already checked
-            .allocator = allocator,
-        };
-    }
-}
-
-//it's caller's responsibility to free the heap
-//caller is managing the lifetime of the nodes
-fn buildHeap(allocator: mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u32), nodesPtr: []Node) !Heap {
-    var heap = Heap.init(allocator, {});
-    var it = frequencyMap.iterator();
-    var idx: usize = 0;
-    while (it.next()) |entry| : (idx += 1) {
-        nodesPtr[idx] = Node{ .leafNode = .{ .charValue = entry.key_ptr.*, .freq = entry.value_ptr.* } };
-        try heap.add(&nodesPtr[idx]); //we write the address within the array, array is what survives!
-    }
-    return heap;
 }
 
 fn openFile(filename: []const u8, flags: fs.File.OpenFlags) !fs.File {
@@ -172,38 +101,34 @@ test "build frequency map" {
 }
 
 test "small_heap" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b' };
     var freqMap = try buildFrequencyMap(allocator, &bytes);
     defer freqMap.deinit();
-    const nodesPtr = try allocator.alloc(Node, freqMap.count());
-    defer allocator.free(nodesPtr);
-    var heap = try buildHeap(std.testing.allocator, &freqMap, nodesPtr);
+    var heap = try Heap.init(allocator, &freqMap);
     defer heap.deinit();
     const expectedValues = &[_]u8{ 'c', 'b', 'a' };
     var idx: usize = 0;
-    while (heap.count() > 0) : (idx += 1) {
-        const item = heap.remove();
+    while (heap.pq.count() > 0) : (idx += 1) {
+        const item = heap.pq.remove();
         try std.testing.expectEqual(expectedValues[idx], item.*.leafNode.charValue);
     }
 }
 
 test "huffman tree test" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b' };
     var freqMap = try buildFrequencyMap(allocator, &bytes);
     defer freqMap.deinit();
-    const nodesPtr = try allocator.alloc(Node, freqMap.count());
-    defer allocator.free(nodesPtr);
-    var heap = try buildHeap(std.testing.allocator, &freqMap, nodesPtr);
+    var heap = try Heap.init(allocator, &freqMap);
     defer heap.deinit();
-    const ht = try buildHuffmanTree(allocator, &heap);
+    const ht = try HuffmanTree.init(allocator, &heap);
     defer ht.deinit();
     ht.root.printSubtree();
 }
 
 test "ui example test" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     var freqMap = std.AutoHashMap(u8, u32).init(allocator);
     defer freqMap.deinit();
@@ -216,13 +141,10 @@ test "ui example test" {
     try freqMap.put('U', 37);
     try freqMap.put('Z', 2);
 
-    const nodesPtr = try allocator.alloc(Node, freqMap.count());
-    defer allocator.free(nodesPtr);
-
-    var heap = try buildHeap(allocator, &freqMap, nodesPtr);
+    var heap = try Heap.init(allocator, &freqMap);
     defer heap.deinit();
 
-    const ht = try buildHuffmanTree(allocator, &heap);
+    const ht = try HuffmanTree.init(allocator, &heap);
     defer ht.deinit();
     ht.root.printSubtree();
 }

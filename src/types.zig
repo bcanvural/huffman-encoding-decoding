@@ -2,6 +2,14 @@ const std = @import("std");
 const print = std.debug.print;
 const mem = std.mem;
 
+pub const HuffmanError = error{
+    EmptyBytes,
+    EmptyHeap,
+    MissingFileNameError,
+    EmptyFileError,
+    InvalidFileNameError,
+};
+
 pub const Node = union(enum) {
     leafNode: LeafNode,
     nonLeafNode: NonLeafNode,
@@ -92,12 +100,89 @@ fn compare(context: void, a: *Node, b: *Node) std.math.Order {
     return std.math.order(a_freq, b_freq);
 }
 
-pub const Heap = std.PriorityQueue(*Node, void, compare);
+//maintains a priority queue that contains pointers to nodes allocated in the nodes array
+//users call pq functionsç directly through pq
+pub const Heap = struct {
+    pq: std.PriorityQueue(*Node, void, compare),
+    nodes: []Node,
+    allocator: mem.Allocator,
+    pub fn init(allocator: mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u32)) !Heap {
+        var pq = std.PriorityQueue(*Node, void, compare).init(allocator, {});
+        var nodes = try allocator.alloc(Node, frequencyMap.count());
+        var it = frequencyMap.iterator();
+        var idx: usize = 0;
+        while (it.next()) |entry| : (idx += 1) {
+            nodes[idx] = Node{ .leafNode = .{ .charValue = entry.key_ptr.*, .freq = entry.value_ptr.* } };
+            try pq.add(&nodes[idx]); //we write the address of the array elemment, array is what survives!
+        }
+        return Heap{
+            .pq = pq,
+            .allocator = allocator,
+            .nodes = nodes,
+        };
+    }
+    pub fn deinit(self: Heap) void {
+        self.pq.deinit();
+        self.allocator.free(self.nodes);
+    }
+};
 
 pub const HuffmanTree = struct {
     root: *Node,
     nodes: []Node,
     allocator: mem.Allocator,
+
+    //build the huffman tree from heap
+    //if heap has 1 element, create a leafnode and we're done
+    //else:
+    //while heap doesnt have only 1 node remaining, do:
+    //  pop 2 item from heap and connect them under non-leaf node whose freq is sum of its children
+    //  add the new non-leaf node back to heap
+    //end
+    //
+    pub fn init(allocator: mem.Allocator, heap: *Heap) !HuffmanTree {
+        const initialHeapSize = heap.pq.count();
+        if (initialHeapSize == 0) {
+            return HuffmanError.EmptyHeap; //shouldn't happen actually
+        }
+        var nodesSize: usize = initialHeapSize - 1;
+        if (nodesSize == 0) {
+            nodesSize = 1;
+        }
+        var nodes = try allocator.alloc(Node, nodesSize);
+        if (nodesSize == 1) {
+            const node = heap.pq.remove();
+            nodes[0] = Node{
+                .leafNode = .{
+                    .charValue = node.leafNode.charValue, //for sure it's leaf
+                    .freq = node.leafNode.freq,
+                },
+            };
+            return HuffmanTree{
+                .nodes = nodes,
+                .root = &nodes[0],
+                .allocator = allocator,
+            };
+        } else {
+            var idx: usize = 0;
+            while (heap.pq.count() > 1) : (idx += 1) {
+                const n1 = heap.pq.remove();
+                const n2 = heap.pq.remove();
+                const newNode: Node = Node{ .nonLeafNode = .{
+                    .freq = n1.getFreq() + n2.getFreq(),
+                    .left = n1,
+                    .right = n2,
+                } };
+                nodes[idx] = newNode;
+                try heap.pq.add(&nodes[idx]); //only nodes array survives, program stack is gg after function call
+            }
+            return HuffmanTree{
+                .nodes = nodes,
+                .root = heap.pq.removeOrNull().?, //we already checked
+                .allocator = allocator,
+            };
+        }
+    }
     pub fn deinit(self: HuffmanTree) void {
         self.allocator.free(self.nodes);
     }
@@ -115,18 +200,19 @@ test "nodetest" {
 }
 
 test "heaptest" {
-    var heap = Heap.init(std.testing.allocator, {});
+    const allocator = std.testing.allocator;
+    var freqMap = std.AutoHashMap(u8, u32).init(allocator);
+    defer freqMap.deinit();
+    try freqMap.put('A', 69);
+    try freqMap.put('B', 10);
+    try freqMap.put('C', 9);
+    try freqMap.put('D', 8);
+
+    var heap = try Heap.init(allocator, &freqMap);
     defer heap.deinit();
 
-    const values = [_]u32{ 69, 10, 9, 8 };
-    var nodes: [values.len]Node = undefined;
-    for (0..values.len) |idx| {
-        nodes[idx] = Node{ .leafNode = .{ .freq = values[idx], .charValue = 'a' } };
-        try heap.add(&nodes[idx]);
-    }
-
-    try std.testing.expectEqual(8, heap.remove().leafNode.freq);
-    try std.testing.expectEqual(9, heap.remove().leafNode.freq);
-    try std.testing.expectEqual(10, heap.remove().leafNode.freq);
-    try std.testing.expectEqual(69, heap.remove().leafNode.freq);
+    try std.testing.expectEqual(8, heap.pq.remove().leafNode.freq);
+    try std.testing.expectEqual(9, heap.pq.remove().leafNode.freq);
+    try std.testing.expectEqual(10, heap.pq.remove().leafNode.freq);
+    try std.testing.expectEqual(69, heap.pq.remove().leafNode.freq);
 }
