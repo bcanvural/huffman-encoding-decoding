@@ -7,6 +7,8 @@ const Heap = @import("types.zig").Heap;
 const HuffmanTree = @import("types.zig").HuffmanTree;
 const HuffmanError = @import("types.zig").HuffmanError;
 
+const MAX_FILE_SIZE: usize = 100000;
+
 fn printMap(map: *std.AutoHashMap(u8, u32)) void {
     print("KEY | VALUE\n", .{});
     var it = map.iterator();
@@ -71,6 +73,10 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
     const filename = try processArgs(args);
     print("Processing {s}...\n", .{filename});
+    const file = try openFile(filename, .{ .mode = .read_only });
+    const raw_bytes = try file.readToEndAlloc(allocator, MAX_FILE_SIZE);
+    defer allocator.free(raw_bytes);
+    try processBytes(allocator, raw_bytes);
 }
 
 test "processargs" {

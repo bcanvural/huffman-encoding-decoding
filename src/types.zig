@@ -19,8 +19,14 @@ pub const Node = union(enum) {
         charValue: u8,
         pub fn printInfo(leafNode: LeafNode) void {
             const charSlice = &[_]u8{leafNode.charValue};
+            const charDescription = switch (leafNode.charValue) {
+                '\n' => "newLine",
+                '\t' => "tab",
+                '\r' => "carriage return",
+                else => charSlice,
+            };
             print("LeafNode: char: {s}, freq: {d}\n", .{
-                charSlice,
+                charDescription,
                 leafNode.freq,
             });
         }
@@ -101,7 +107,7 @@ fn compare(context: void, a: *Node, b: *Node) std.math.Order {
 }
 
 //maintains a priority queue that contains pointers to nodes allocated in the nodes array
-//users call pq functionsç directly through pq
+//users call pq functions directly through pq
 pub const Heap = struct {
     pq: std.PriorityQueue(*Node, void, compare),
     nodes: []Node,
