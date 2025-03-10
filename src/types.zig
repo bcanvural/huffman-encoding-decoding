@@ -10,6 +10,7 @@ pub const HuffmanError = error{
     InvalidInputFileNameError,
     InvalidOutputFileNameError,
     FileHeaderParseError,
+    InvalidOperationError,
 };
 
 pub const FreqMap = std.AutoHashMap(u8, u32);

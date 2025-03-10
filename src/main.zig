@@ -74,9 +74,7 @@ fn deserializeFrequencyMap(allocator: mem.Allocator, bytes: []u8) !FreqMap {
             testvar = bytes[subIdx];
         }
         const keyByte = bytes[idx];
-        print("subIdx is: {d}\n", .{subIdx});
         const valueBytes = bytes[(idx + 1)..subIdx];
-        print("valuebytes is: {s}\n", .{valueBytes});
         const value = try std.fmt.parseInt(u32, valueBytes, 10);
         try freqmap.put(keyByte, value);
         idx = subIdx + 1;
@@ -123,16 +121,39 @@ fn openFile(filename: []const u8, flags: fs.File.OpenFlags) !fs.File {
     }
 }
 
+pub const Operation = enum {
+    Compression,
+    Decompression,
+    pub fn toStr(self: Operation) []const u8 {
+        switch (self) {
+            Operation.Compression => return "Compression",
+            Operation.Decompression => return "Decompression",
+        }
+    }
+};
 pub const ArgsResult = struct {
+    operation: Operation,
     inputFileName: []u8,
     outputFileName: []u8,
 };
 
 fn processArgs(args: [][]u8) !ArgsResult {
-    if (args.len < 3) {
+    if (args.len < 4) {
         return HuffmanError.MissingFileNameError;
     }
-    const inputFileName = args[1];
+
+    var operation: Operation = undefined;
+
+    if (mem.eql(u8, args[1], "-c")) {
+        operation = Operation.Compression;
+    } else if (mem.eql(u8, args[1], "-d")) {
+        operation = Operation.Decompression;
+    } else {
+        print("{s}\n", .{args[1]});
+        return HuffmanError.InvalidOperationError;
+    }
+
+    const inputFileName = args[2];
     if (inputFileName.len == 0) {
         return HuffmanError.InvalidInputFileNameError;
     }
@@ -142,11 +163,12 @@ fn processArgs(args: [][]u8) !ArgsResult {
     if (stat.size == 0) {
         return HuffmanError.EmptyFileError;
     }
-    const outputFileName = args[2];
+    const outputFileName = args[3];
     if (outputFileName.len == 0) {
         return HuffmanError.InvalidInputFileNameError;
     }
     return ArgsResult{
+        .operation = operation,
         .inputFileName = inputFileName,
         .outputFileName = outputFileName,
     };
@@ -157,11 +179,15 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(std.heap.page_allocator);
     defer std.process.argsFree(allocator, args);
     const argsResult = processArgs(args) catch |err| switch (err) {
-        HuffmanError.InvalidInputFileNameError, HuffmanError.InvalidOutputFileNameError => print("Usage: <program> <input_file> <output_file>\n", .{}),
+        HuffmanError.InvalidInputFileNameError, HuffmanError.InvalidOutputFileNameError, HuffmanError.InvalidOperationError => print("Usage: <program> <input_file> <output_file>\n", .{}),
         HuffmanError.EmptyFileError => print("Input file is empty\n", .{}),
         else => return err,
     };
-    print("Processing {s}...\n", .{argsResult.inputFileName});
+
+    print("Operation:{s}\n", .{argsResult.operation.toStr()});
+    print("Input file: {s}\n", .{argsResult.inputFileName});
+    print("Output file: {s}\n", .{argsResult.outputFileName});
+
     const file = try openFile(argsResult.inputFileName, .{ .mode = .read_only });
     const raw_bytes = try file.readToEndAlloc(allocator, MAX_FILE_SIZE);
     defer allocator.free(raw_bytes);
@@ -170,21 +196,18 @@ pub fn main() !void {
 
 test "processargs" {
     const allocator = std.testing.allocator;
-    //printing pwd for debugging
-    const pwd: []u8 = try allocator.alloc(u8, 100);
-    defer allocator.free(pwd);
-    _ = try fs.cwd().realpath(".", pwd);
-    //
-    print("pwd: {s}\n", .{pwd});
     var fakeArgs = [_][]u8{
         try allocator.dupe(u8, "huffman-encoding-decoding"),
+        try allocator.dupe(u8, "-c"),
         try allocator.dupe(u8, "tests/book.txt"),
         try allocator.dupe(u8, "output"),
     };
     defer allocator.free(fakeArgs[0]);
     defer allocator.free(fakeArgs[1]);
     defer allocator.free(fakeArgs[2]);
+    defer allocator.free(fakeArgs[3]);
     const argsResult = try processArgs(&fakeArgs);
+    try std.testing.expectEqual(Operation.Compression, argsResult.operation);
     try std.testing.expectEqualStrings("tests/book.txt", argsResult.inputFileName);
     try std.testing.expectEqualStrings("output", argsResult.outputFileName);
 }
