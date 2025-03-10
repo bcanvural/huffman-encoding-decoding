@@ -8,7 +8,7 @@ const FreqMap = @import("types.zig").FreqMap;
 const HuffmanTree = @import("types.zig").HuffmanTree;
 const HuffmanError = @import("types.zig").HuffmanError;
 
-const MAX_FILE_SIZE: usize = 100000;
+const MAX_FILE_SIZE: usize = 100000000;
 const HEADER_DELIMITER: u8 = '#';
 
 //Format: [1byte key][up to 10 byte value][;][1byte key][up to 10 byte value][;]...
@@ -180,8 +180,14 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(std.heap.page_allocator);
     defer std.process.argsFree(allocator, args);
     const argsResult = processArgs(args) catch |err| switch (err) {
-        HuffmanError.InvalidInputFileNameError, HuffmanError.InvalidOutputFileNameError, HuffmanError.InvalidOperationError => print("Usage: <program> <input_file> <output_file>\n", .{}),
-        HuffmanError.EmptyFileError => print("Input file is empty\n", .{}),
+        HuffmanError.InvalidInputFileNameError, HuffmanError.InvalidOutputFileNameError, HuffmanError.InvalidOperationError => {
+            print("Usage: <program> <input_file> <output_file>\n", .{});
+            return;
+        },
+        HuffmanError.EmptyFileError => {
+            print("Input file is empty\n", .{});
+            return;
+        },
         else => return err,
     };
 
