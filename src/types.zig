@@ -7,8 +7,12 @@ pub const HuffmanError = error{
     EmptyHeap,
     MissingFileNameError,
     EmptyFileError,
-    InvalidFileNameError,
+    InvalidInputFileNameError,
+    InvalidOutputFileNameError,
+    FileHeaderParseError,
 };
+
+pub const FreqMap = std.AutoHashMap(u8, u32);
 
 pub const Node = union(enum) {
     leafNode: LeafNode,
