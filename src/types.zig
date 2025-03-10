@@ -22,6 +22,7 @@ pub const Node = union(enum) {
     pub const LeafNode = struct {
         freq: u32,
         charValue: u8,
+        encoding: []const u8 = undefined,
         pub fn printInfo(leafNode: LeafNode) void {
             const charSlice = &[_]u8{leafNode.charValue};
             const charDescription = switch (leafNode.charValue) {
@@ -30,9 +31,11 @@ pub const Node = union(enum) {
                 '\r' => "carriage return",
                 else => charSlice,
             };
-            print("LeafNode: char: {s}, freq: {d}\n", .{
+
+            print("LeafNode: char: {s}, freq: {d}, encoding: {s}\n", .{
                 charDescription,
                 leafNode.freq,
+                leafNode.encoding,
             });
         }
     };
@@ -91,6 +94,36 @@ pub const Node = union(enum) {
                 node.nonLeafNode.printInfo();
                 printSubtreeWithLevel(node.nonLeafNode.left.*, level + 1);
                 printSubtreeWithLevel(node.nonLeafNode.right.*, level + 1);
+            },
+        }
+    }
+
+    //todo test encoding
+    pub fn assignEncoding(node: Node) void {
+        switch (node) {
+            .leafNode => assignEncodingInternal(node, "0"),
+            .nonLeafNode => {
+                assignEncodingInternal(node.nonLeafNode.left, "0");
+                assignEncodingInternal(node.nonLeafNode.right, "1");
+            },
+        }
+    }
+    fn assignEncodingInternal(node: Node, encoding: []const u8) void {
+        switch (node) {
+            .leafNode => node.leafNode.encoding = encoding,
+            .nonLeafNode => {
+                //todo investigate if below two can be inlined
+                //avoiding heap allocation
+                var addZero: [encoding.len + 1]u8 = undefined;
+                mem.copyForwards(u8, &addZero, encoding);
+                addZero[addZero.len - 1] = '0';
+
+                var addOne: [encoding.len + 1]u8 = undefined;
+                mem.copyForwards(u8, &addOne, encoding);
+                addOne[addOne.len - 1] = '1';
+
+                assignEncodingInternal(node.nonLeafNode.left, &addZero);
+                assignEncodingInternal(node.nonLeafNode.riht, &addOne);
             },
         }
     }
