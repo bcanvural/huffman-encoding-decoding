@@ -11,13 +11,14 @@ const HuffmanError = @import("types.zig").HuffmanError;
 const MAX_FILE_SIZE: usize = 100000;
 const HEADER_DELIMITER: u8 = '#';
 
-//Format: [1byte key][up to 4 byte value][;][1byte key][up to 4 byte value][;]...
+//Format: [1byte key][up to 10 byte value][;][1byte key][up to 10 byte value][;]...
+// 10 byte because 2^32 has 10 digits
 fn serializeFreqMap(freqMap: *FreqMap, outputFileName: []const u8) !void {
     const outputFile = try fs.cwd().createFile(outputFileName, .{});
     var it = freqMap.iterator();
     while (it.next()) |entry| {
         _ = try outputFile.write(&[_]u8{entry.key_ptr.*});
-        var buffer: [4]u8 = undefined;
+        var buffer: [10]u8 = undefined;
         const valueStr = try std.fmt.bufPrint(&buffer, "{}", .{entry.value_ptr.*});
         _ = try outputFile.write(valueStr);
         _ = try outputFile.write(";");
@@ -56,7 +57,7 @@ test "serializeFreqMap / readCompressedFileHeader / deserializeFrequencyMap test
 }
 
 //parses the word frequency map from a previously compressed file
-//Format: [1byte key][up to 4 byte value][;][1byte key][up to 4 byte value][;]...
+//Format: [1byte key][up to 10 byte value][;][1byte key][up to 10 byte value][;]...
 fn deserializeFrequencyMap(allocator: mem.Allocator, bytes: []u8) !FreqMap {
     if (bytes.len == 0) {
         return HuffmanError.FileHeaderParseError;
