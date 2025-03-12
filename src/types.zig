@@ -11,6 +11,7 @@ pub const HuffmanError = error{
     InvalidOutputFileNameError,
     FileHeaderParseError,
     InvalidOperationError,
+    MaxTreeDepthExceeded,
 };
 
 pub const FreqMap = std.AutoHashMap(u8, u32);
@@ -97,36 +98,6 @@ pub const Node = union(enum) {
             },
         }
     }
-
-    //todo test encoding
-    pub fn assignEncoding(node: Node) void {
-        switch (node) {
-            .leafNode => assignEncodingInternal(node, "0"),
-            .nonLeafNode => {
-                assignEncodingInternal(node.nonLeafNode.left, "0");
-                assignEncodingInternal(node.nonLeafNode.right, "1");
-            },
-        }
-    }
-    fn assignEncodingInternal(node: Node, encoding: []const u8) void {
-        switch (node) {
-            .leafNode => node.leafNode.encoding = encoding,
-            .nonLeafNode => {
-                //todo investigate if below two can be inlined
-                //avoiding heap allocation
-                var addZero: [encoding.len + 1]u8 = undefined;
-                mem.copyForwards(u8, &addZero, encoding);
-                addZero[addZero.len - 1] = '0';
-
-                var addOne: [encoding.len + 1]u8 = undefined;
-                mem.copyForwards(u8, &addOne, encoding);
-                addOne[addOne.len - 1] = '1';
-
-                assignEncodingInternal(node.nonLeafNode.left, &addZero);
-                assignEncodingInternal(node.nonLeafNode.riht, &addOne);
-            },
-        }
-    }
 };
 
 fn compare(context: void, a: *Node, b: *Node) std.math.Order {
@@ -146,11 +117,13 @@ fn compare(context: void, a: *Node, b: *Node) std.math.Order {
 
 //maintains a priority queue that contains pointers to nodes allocated in the nodes array
 //users call pq functions directly through pq
+//TODO consider moving heap inside huffmantree!
+//reason: ownership of data
 pub const Heap = struct {
     pq: std.PriorityQueue(*Node, void, compare),
     nodes: []Node,
     allocator: mem.Allocator,
-    pub fn init(allocator: mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u32)) !Heap {
+    pub fn init(allocator: mem.Allocator, frequencyMap: *FreqMap) !Heap {
         var pq = std.PriorityQueue(*Node, void, compare).init(allocator, {});
         var nodes = try allocator.alloc(Node, frequencyMap.count());
         var it = frequencyMap.iterator();
@@ -173,9 +146,10 @@ pub const Heap = struct {
 
 pub const HuffmanTree = struct {
     root: *Node,
-    nodes: []Node,
+    nodes: []Node, // TODO maybe manage nonleaf and leafnodes separately but owned by HuffmanTree
     allocator: mem.Allocator,
-
+    const MAX_TREE_DEPTH: usize = 64;
+    const ENCODING_ARRAY_SENTINEL: u8 = 'X';
     //build the huffman tree from heap
     //if heap has 1 element, create a leafnode and we're done
     //else:
@@ -202,33 +176,103 @@ pub const HuffmanTree = struct {
                     .freq = node.leafNode.freq,
                 },
             };
-            return HuffmanTree{
+            const ht = HuffmanTree{
                 .nodes = nodes,
                 .root = &nodes[0],
                 .allocator = allocator,
             };
+            try ht.assignEncoding();
+            return ht;
         } else {
             var idx: usize = 0;
             while (heap.pq.count() > 1) : (idx += 1) {
                 const n1 = heap.pq.remove();
                 const n2 = heap.pq.remove();
-                const newNode: Node = Node{ .nonLeafNode = .{
-                    .freq = n1.getFreq() + n2.getFreq(),
-                    .left = n1,
-                    .right = n2,
-                } };
+                const left = try allocator.create(Node);
+                left.* = n1.*;
+                const right = try allocator.create(Node);
+                right.* = n2.*;
+                const newNode: Node = Node{
+                    .nonLeafNode = .{
+                        .freq = n1.getFreq() + n2.getFreq(),
+                        .left = left,
+                        .right = right,
+                    },
+                };
                 nodes[idx] = newNode;
                 try heap.pq.add(&nodes[idx]); //only nodes array survives, program stack is gg after function call
             }
-            return HuffmanTree{
+
+            const ht = HuffmanTree{
                 .nodes = nodes,
                 .root = heap.pq.removeOrNull().?, //we already checked
                 .allocator = allocator,
             };
+            try ht.assignEncoding();
+            return ht;
         }
     }
     pub fn deinit(self: HuffmanTree) void {
+        for (self.nodes) |node| {
+            switch (node) {
+                .leafNode => {
+                    self.allocator.free(node.leafNode.encoding);
+                },
+                else => {},
+            }
+        }
         self.allocator.free(self.nodes);
+    }
+    //todo test encoding
+    fn assignEncoding(self: HuffmanTree) !void {
+        const node = self.root;
+        switch (node.*) {
+            .leafNode => {
+                try assignEncodingInternal(self.allocator, node, "0");
+            },
+            .nonLeafNode => {
+                try assignEncodingInternal(self.allocator, node.nonLeafNode.left, "0");
+                try assignEncodingInternal(self.allocator, node.nonLeafNode.right, "1");
+            },
+        }
+    }
+    fn assignEncodingInternal(allocator: mem.Allocator, node: *Node, encoding: []const u8) !void {
+        switch (node.*) {
+            .leafNode => {
+                var encodingList = std.ArrayList(u8).init(allocator);
+                defer encodingList.deinit();
+                for (encoding) |ch| {
+                    if (ch == ENCODING_ARRAY_SENTINEL) {
+                        break;
+                    }
+                    try encodingList.append(ch);
+                }
+                const encodingSlice = try encodingList.toOwnedSlice();
+                errdefer allocator.free(encodingSlice);
+                node.leafNode.encoding = encodingSlice; //this memory is freed in deinit
+            },
+            .nonLeafNode => {
+                //TODO decide who manages the encoding string memory. Huffmantree? Node? what about print
+                //avoiding heap allocation
+                var addZero: [MAX_TREE_DEPTH]u8 = undefined;
+                @memset(&addZero, ENCODING_ARRAY_SENTINEL);
+                var addOne: [MAX_TREE_DEPTH]u8 = undefined;
+                @memset(&addOne, ENCODING_ARRAY_SENTINEL);
+
+                if (encoding.len + 1 >= MAX_TREE_DEPTH) {
+                    return HuffmanError.MaxTreeDepthExceeded;
+                }
+
+                mem.copyForwards(u8, addZero[0..encoding.len], encoding);
+                addZero[encoding.len] = '0';
+
+                mem.copyForwards(u8, addOne[0..encoding.len], encoding);
+                addOne[encoding.len] = '1';
+
+                try assignEncodingInternal(allocator, node.nonLeafNode.left, addZero[0 .. encoding.len + 1]);
+                try assignEncodingInternal(allocator, node.nonLeafNode.right, addOne[0 .. encoding.len + 1]);
+            },
+        }
     }
 };
 
