@@ -13,6 +13,7 @@ const HEADER_DELIMITER: u8 = '#';
 
 //Format: [1byte key][up to 10 byte value][;][1byte key][up to 10 byte value][;]...
 // 10 byte because 2^32 has 10 digits
+// TODO encoding matters after all!
 fn serializeFreqMap(freqMap: *FreqMap, outputFileName: []const u8) !void {
     const outputFile = try fs.cwd().createFile(outputFileName, .{}); //TODO handle absolute vs relative path
     defer outputFile.close();
