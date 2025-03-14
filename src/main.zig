@@ -93,10 +93,10 @@ fn processBytes(allocator: mem.Allocator, bytes: []u8) !void {
     var frequencyMap = try buildFrequencyMap(allocator, bytes);
     defer frequencyMap.deinit();
 
-    var heap = try Heap.init(allocator, &frequencyMap);
-    defer heap.deinit();
+    // var heap = try Heap.init(allocator, &frequencyMap);
+    // defer heap.deinit();
 
-    const ht = try HuffmanTree.init(allocator, &heap);
+    const ht = try HuffmanTree.init(allocator, &frequencyMap);
     defer ht.deinit();
     ht.root.printSubtree();
 }
@@ -233,7 +233,9 @@ test "small_heap" {
     var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b' };
     var freqMap = try buildFrequencyMap(allocator, &bytes);
     defer freqMap.deinit();
-    var heap = try Heap.init(allocator, &freqMap);
+    const nodes = try allocator.alloc(Node, freqMap.count());
+    defer allocator.free(nodes);
+    var heap = try Heap.init(allocator, &freqMap, nodes);
     defer heap.deinit();
     const expectedValues = &[_]u8{ 'c', 'b', 'a' };
     var idx: usize = 0;
@@ -248,9 +250,7 @@ test "huffman tree test" {
     var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b' };
     var freqMap = try buildFrequencyMap(allocator, &bytes);
     defer freqMap.deinit();
-    var heap = try Heap.init(allocator, &freqMap);
-    defer heap.deinit();
-    const ht = try HuffmanTree.init(allocator, &heap);
+    const ht = try HuffmanTree.init(allocator, &freqMap);
     defer ht.deinit();
     ht.root.printSubtree();
 }
@@ -269,10 +269,7 @@ test "ui example test" {
     try freqMap.put('U', 37);
     try freqMap.put('Z', 2);
 
-    var heap = try Heap.init(allocator, &freqMap);
-    defer heap.deinit();
-
-    const ht = try HuffmanTree.init(allocator, &heap);
+    const ht = try HuffmanTree.init(allocator, &freqMap);
     defer ht.deinit();
     ht.root.printSubtree();
 }

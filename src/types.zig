@@ -11,6 +11,7 @@ pub const HuffmanError = error{
     InvalidOutputFileNameError,
     FileHeaderParseError,
     InvalidOperationError,
+    MaxTreeDepthExceeded,
 };
 
 pub const FreqMap = std.AutoHashMap(u8, u32);
@@ -97,36 +98,6 @@ pub const Node = union(enum) {
             },
         }
     }
-
-    //todo test encoding
-    pub fn assignEncoding(node: Node) void {
-        switch (node) {
-            .leafNode => assignEncodingInternal(node, "0"),
-            .nonLeafNode => {
-                assignEncodingInternal(node.nonLeafNode.left, "0");
-                assignEncodingInternal(node.nonLeafNode.right, "1");
-            },
-        }
-    }
-    fn assignEncodingInternal(node: Node, encoding: []const u8) void {
-        switch (node) {
-            .leafNode => node.leafNode.encoding = encoding,
-            .nonLeafNode => {
-                //todo investigate if below two can be inlined
-                //avoiding heap allocation
-                var addZero: [encoding.len + 1]u8 = undefined;
-                mem.copyForwards(u8, &addZero, encoding);
-                addZero[addZero.len - 1] = '0';
-
-                var addOne: [encoding.len + 1]u8 = undefined;
-                mem.copyForwards(u8, &addOne, encoding);
-                addOne[addOne.len - 1] = '1';
-
-                assignEncodingInternal(node.nonLeafNode.left, &addZero);
-                assignEncodingInternal(node.nonLeafNode.riht, &addOne);
-            },
-        }
-    }
 };
 
 fn compare(context: void, a: *Node, b: *Node) std.math.Order {
@@ -144,15 +115,14 @@ fn compare(context: void, a: *Node, b: *Node) std.math.Order {
     return std.math.order(a_freq, b_freq);
 }
 
-//maintains a priority queue that contains pointers to nodes allocated in the nodes array
+//maintains a priority queue that contains pointers to nodes allocated/managed outside the Heap
 //users call pq functions directly through pq
+//nodes is a slice of nodes whose lifecycle is managed outside Heap.
 pub const Heap = struct {
     pq: std.PriorityQueue(*Node, void, compare),
-    nodes: []Node,
     allocator: mem.Allocator,
-    pub fn init(allocator: mem.Allocator, frequencyMap: *std.AutoHashMap(u8, u32)) !Heap {
+    pub fn init(allocator: mem.Allocator, frequencyMap: *FreqMap, nodes: []Node) !Heap {
         var pq = std.PriorityQueue(*Node, void, compare).init(allocator, {});
-        var nodes = try allocator.alloc(Node, frequencyMap.count());
         var it = frequencyMap.iterator();
         var idx: usize = 0;
         while (it.next()) |entry| : (idx += 1) {
@@ -162,20 +132,19 @@ pub const Heap = struct {
         return Heap{
             .pq = pq,
             .allocator = allocator,
-            .nodes = nodes,
         };
     }
     pub fn deinit(self: Heap) void {
         self.pq.deinit();
-        self.allocator.free(self.nodes);
     }
 };
 
 pub const HuffmanTree = struct {
     root: *Node,
-    nodes: []Node,
+    nodes: []Node, //we'll manage both leaf and non-leaf nodes' lifecycle inside huffmantree
     allocator: mem.Allocator,
-
+    const MAX_TREE_DEPTH: usize = 64;
+    const ENCODING_ARRAY_SENTINEL: u8 = 'X';
     //build the huffman tree from heap
     //if heap has 1 element, create a leafnode and we're done
     //else:
@@ -184,16 +153,15 @@ pub const HuffmanTree = struct {
     //  add the new non-leaf node back to heap
     //end
     //
-    pub fn init(allocator: mem.Allocator, heap: *Heap) !HuffmanTree {
-        const initialHeapSize = heap.pq.count();
-        if (initialHeapSize == 0) {
-            return HuffmanError.EmptyHeap; //shouldn't happen actually
-        }
-        var nodesSize: usize = initialHeapSize - 1;
-        if (nodesSize == 0) {
-            nodesSize = 1;
-        }
+    //todo continue refactoring but use heap as a separate data structure to make it more modular(easier to test)
+    pub fn init(allocator: mem.Allocator, freqMap: *FreqMap) !HuffmanTree {
+        //every occurrence in freqmap will be leafnode first, so n
+        //there will be n-1 non-leaf nodes. total sum = 2n - 1
+        const nodesSize = freqMap.count() * 2 - 1;
         var nodes = try allocator.alloc(Node, nodesSize);
+        var heap = try Heap.init(allocator, freqMap, nodes);
+        print("heap count is: {d}\n", .{heap.pq.count()});
+        //special case: node size is 1. then the only(root) node is a leaf node
         if (nodesSize == 1) {
             const node = heap.pq.remove();
             nodes[0] = Node{
@@ -202,33 +170,99 @@ pub const HuffmanTree = struct {
                     .freq = node.leafNode.freq,
                 },
             };
-            return HuffmanTree{
+            const ht = HuffmanTree{
                 .nodes = nodes,
                 .root = &nodes[0],
                 .allocator = allocator,
             };
+            try ht.assignEncoding();
+            return ht;
         } else {
-            var idx: usize = 0;
+            var idx = heap.pq.count(); //we start at heap's count because new nodes will be assigned to new indices
             while (heap.pq.count() > 1) : (idx += 1) {
                 const n1 = heap.pq.remove();
                 const n2 = heap.pq.remove();
-                const newNode: Node = Node{ .nonLeafNode = .{
-                    .freq = n1.getFreq() + n2.getFreq(),
-                    .left = n1,
-                    .right = n2,
-                } };
+                const newNode: Node = Node{
+                    .nonLeafNode = .{
+                        .freq = n1.getFreq() + n2.getFreq(),
+                        .left = n1,
+                        .right = n2,
+                    },
+                };
                 nodes[idx] = newNode;
-                try heap.pq.add(&nodes[idx]); //only nodes array survives, program stack is gg after function call
+                try heap.pq.add(&nodes[idx]);
             }
-            return HuffmanTree{
+
+            const ht = HuffmanTree{
                 .nodes = nodes,
-                .root = heap.pq.removeOrNull().?, //we already checked
+                .root = heap.pq.remove(),
                 .allocator = allocator,
             };
+            heap.deinit();
+            try ht.assignEncoding();
+            return ht;
         }
     }
     pub fn deinit(self: HuffmanTree) void {
+        for (self.nodes) |node| {
+            switch (node) {
+                .leafNode => {
+                    self.allocator.free(node.leafNode.encoding);
+                },
+                else => {},
+            }
+        }
         self.allocator.free(self.nodes);
+    }
+    //todo test encoding
+    fn assignEncoding(self: HuffmanTree) !void {
+        const node = self.root;
+        switch (node.*) {
+            .leafNode => {
+                try assignEncodingInternal(self.allocator, node, "0");
+            },
+            .nonLeafNode => {
+                try assignEncodingInternal(self.allocator, node.nonLeafNode.left, "0");
+                try assignEncodingInternal(self.allocator, node.nonLeafNode.right, "1");
+            },
+        }
+    }
+    fn assignEncodingInternal(allocator: mem.Allocator, node: *Node, encoding: []const u8) !void {
+        switch (node.*) {
+            .leafNode => {
+                var encodingList = std.ArrayList(u8).init(allocator);
+                defer encodingList.deinit();
+                for (encoding) |ch| {
+                    if (ch == ENCODING_ARRAY_SENTINEL) {
+                        break;
+                    }
+                    try encodingList.append(ch);
+                }
+                const encodingSlice = try encodingList.toOwnedSlice();
+                errdefer allocator.free(encodingSlice); //TODO not sure if this is needed
+                node.leafNode.encoding = encodingSlice; //this memory is freed in deinit
+            },
+            .nonLeafNode => {
+                //avoiding heap allocation
+                var addZero: [MAX_TREE_DEPTH]u8 = undefined;
+                @memset(&addZero, ENCODING_ARRAY_SENTINEL);
+                var addOne: [MAX_TREE_DEPTH]u8 = undefined;
+                @memset(&addOne, ENCODING_ARRAY_SENTINEL);
+
+                if (encoding.len + 1 >= MAX_TREE_DEPTH) {
+                    return HuffmanError.MaxTreeDepthExceeded;
+                }
+
+                mem.copyForwards(u8, addZero[0..encoding.len], encoding);
+                addZero[encoding.len] = '0';
+
+                mem.copyForwards(u8, addOne[0..encoding.len], encoding);
+                addOne[encoding.len] = '1';
+
+                try assignEncodingInternal(allocator, node.nonLeafNode.left, addZero[0 .. encoding.len + 1]);
+                try assignEncodingInternal(allocator, node.nonLeafNode.right, addOne[0 .. encoding.len + 1]);
+            },
+        }
     }
 };
 
@@ -252,7 +286,10 @@ test "heaptest" {
     try freqMap.put('C', 9);
     try freqMap.put('D', 8);
 
-    var heap = try Heap.init(allocator, &freqMap);
+    const nodes = try allocator.alloc(Node, freqMap.count());
+    defer allocator.free(nodes);
+
+    var heap = try Heap.init(allocator, &freqMap, nodes);
     defer heap.deinit();
 
     try std.testing.expectEqual(8, heap.pq.remove().leafNode.freq);
