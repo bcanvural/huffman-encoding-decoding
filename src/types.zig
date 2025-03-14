@@ -239,7 +239,6 @@ pub const HuffmanTree = struct {
                     try encodingList.append(ch);
                 }
                 const encodingSlice = try encodingList.toOwnedSlice();
-                errdefer allocator.free(encodingSlice); //TODO not sure if this is needed
                 node.leafNode.encoding = encodingSlice; //this memory is freed in deinit
             },
             .nonLeafNode => {
