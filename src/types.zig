@@ -214,7 +214,15 @@ pub const HuffmanTree = struct {
         }
         self.allocator.free(self.nodes);
     }
-    //todo test encoding
+
+    //TODO compression: from bytes -> encoding
+    //  byte -> freqmap lookup -> freq to encoding (this is TODO)
+    //decompression: encoding -> bytes
+    // consume encoding -> find byte (TODO) . traverse huffmantree?
+    // problem during decompression: how do we know encoding for a given byte ended? do we need delimiters (TODO)?
+
+    //Todo below will change, we won't save encoding on the node anymore, we'll collect them in a different map
+    //Below should return this new map. Map is owned by caller
     fn assignEncoding(self: HuffmanTree) !void {
         const node = self.root;
         switch (node.*) {

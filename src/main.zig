@@ -14,7 +14,7 @@ const HEADER_DELIMITER: u8 = '#';
 //Format: [1byte key][up to 10 byte value][;][1byte key][up to 10 byte value][;]...
 // 10 byte because 2^32 has 10 digits
 fn serializeFreqMap(freqMap: *FreqMap, outputFileName: []const u8) !void {
-    const outputFile = try fs.cwd().createFile(outputFileName, .{}); // todo handle absolute vs relative path
+    const outputFile = try fs.cwd().createFile(outputFileName, .{}); //TODO handle absolute vs relative path
     defer outputFile.close();
     var it = freqMap.iterator();
     while (it.next()) |entry| {
@@ -90,16 +90,27 @@ test "slicetest" {
     print("{d}\n", .{try std.fmt.parseInt(u32, sliced, 10)});
 }
 
-fn processBytes(allocator: mem.Allocator, bytes: []u8) !void {
-    var frequencyMap = try buildFrequencyMap(allocator, bytes);
-    defer frequencyMap.deinit();
+//pre: header is already written to file
+//walk through raw_bytes, serialize encoding for each byte into file.
+// fn serializeEncoding(
+//     ht: HuffmanTree,
+//     raw_bytes: []u8,
+//     outputFileName: []const u8,
+// ) !void {
+//     const outputFile = try openFile(outputFileName, .{ .mode = .{.read_write} });
+//     defer outputFile.close();
+//     //seek HEADER_DELIMITER, then append ? or just append.
+// }
 
-    // var heap = try Heap.init(allocator, &frequencyMap);
-    // defer heap.deinit();
+fn processBytes(allocator: mem.Allocator, bytes: []u8, outputFileName: []const u8) !void {
+    var freqMap = try buildFrequencyMap(allocator, bytes);
+    defer freqMap.deinit();
 
-    const ht = try HuffmanTree.init(allocator, &frequencyMap);
+    const ht = try HuffmanTree.init(allocator, &freqMap);
     defer ht.deinit();
     ht.root.printSubtree();
+
+    try serializeFreqMap(&freqMap, outputFileName);
 }
 //operates on the input file's text to construct the word frequency map for the first time.
 fn buildFrequencyMap(allocator: mem.Allocator, bytes: []u8) !FreqMap {
@@ -199,7 +210,7 @@ pub fn main() !void {
     const file = try openFile(argsResult.inputFileName, .{ .mode = .read_only });
     const raw_bytes = try file.readToEndAlloc(allocator, MAX_FILE_SIZE);
     defer allocator.free(raw_bytes);
-    try processBytes(allocator, raw_bytes);
+    try processBytes(allocator, raw_bytes, argsResult.outputFileName);
 }
 
 test "processargs" {
@@ -281,5 +292,5 @@ test "file_test" {
     const ally = std.testing.allocator;
     const book = try file.reader().readAllAlloc(ally, 10000000);
     defer ally.free(book);
-    try processBytes(ally, book);
+    try processBytes(ally, book, "output");
 }
