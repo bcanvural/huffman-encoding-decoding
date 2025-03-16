@@ -107,7 +107,36 @@ test "slicetest" {
 //     const outputFile = try openFile(outputFileName, .{ .mode = .{.read_write} });
 //     defer outputFile.close();
 //     //seek HEADER_DELIMITER, then append ? or just append.
+//     //TODO: hmm do we need to pack the prefixtree(encodings) to bit strings?Not sure:
+//     //"translate the prefixes into bit strings and pack them into bytes to achieve the compression"
+//     //so: grab 8 bits from the pool?write it as char and continue?some encodings will straddle char boundries
+//     const freqmap = try deserializeFrequencyMap(ht.allocator, raw_bytes);
+//     defer freqmap.deinit();
+//
+//
 // }
+
+//TODO
+//encodingmap contains byte array of bit strings (e.g. 1110 as 4 bytes: 1, 1, 1, and 0)
+//we want to convert that to 1110 as bits, so in above example we'd fit 2 of such stirngs into 1 char (8 bytes)
+//algo:
+//read 1 byte from intput file
+//find the encoding of that byte using encodingMap
+//once we have the encoding string, do:
+//  in a loop, collect 8 bits, write 1 char
+//  last iteration we'll have <8 chars, write the remainder too. maybe we'll need to know when the encoding ended? maybe use another sentinel
+//end
+//looks like endinanness matters: maybe little endian would be more intuitive? think about decoding the bits too
+//
+fn encodingMaptoRawBytes(
+    allocator: mem.Allocator,
+    encodingMap: *std.AutoHashMap(u8, []const u8),
+    inputFile: fs.File,
+) ![]u8 {
+    _ = allocator;
+    _ = encodingMap;
+    _ = inputFile;
+}
 
 fn processBytes(allocator: mem.Allocator, bytes: []u8, outputFileName: []const u8) !void {
     var freqMap = try buildFrequencyMap(allocator, bytes);

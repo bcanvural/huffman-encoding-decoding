@@ -225,6 +225,9 @@ pub const HuffmanTree = struct {
 
     //For compression,  we need a map: from bytes -> encoding . With it we can encode each byte to bits
     //  byte -> freqmap lookup -> freq to encoding (this is what we call encodingMap)
+    //TODO: hmm do we need to pack the prefixtree(encodings) to bit strings?Not sure:
+    //"translate the prefixes into bit strings and pack them into bytes to achieve the compression"
+    //so: grab 8 bits from the pool?write it as char and continue?some encodings will straddle char boundries
 
     //map is byte -> encoding
     pub fn getOwnedEncodingMap(allocator: mem.Allocator, root: *Node) !std.AutoHashMap(u8, []const u8) {
