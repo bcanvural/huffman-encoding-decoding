@@ -139,10 +139,17 @@ pub const Heap = struct {
     }
 };
 
+fn printMap(map: *std.AutoHashMap(u8, []const u8)) void {
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        print("key: {c} value: {s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+    }
+}
 pub const HuffmanTree = struct {
     root: *Node,
     nodes: []Node, //we'll manage both leaf and non-leaf nodes' lifecycle inside huffmantree
     allocator: mem.Allocator,
+    encodingMap: std.AutoHashMap(u8, []const u8),
     const MAX_TREE_DEPTH: usize = 64;
     const ENCODING_ARRAY_SENTINEL: u8 = 'X';
     //build the huffman tree from heap
@@ -153,15 +160,14 @@ pub const HuffmanTree = struct {
     //  add the new non-leaf node back to heap
     //end
     //
-    //todo continue refactoring but use heap as a separate data structure to make it more modular(easier to test)
     pub fn init(allocator: mem.Allocator, freqMap: *FreqMap) !HuffmanTree {
         //every occurrence in freqmap will be leafnode first, so n
         //there will be n-1 non-leaf nodes. total sum = 2n - 1
         const nodesSize = freqMap.count() * 2 - 1;
         var nodes = try allocator.alloc(Node, nodesSize);
         var heap = try Heap.init(allocator, freqMap, nodes);
-        print("heap count is: {d}\n", .{heap.pq.count()});
         //special case: node size is 1. then the only(root) node is a leaf node
+        //todo: maybe don't compress the file if it's 1 byte long?
         if (nodesSize == 1) {
             const node = heap.pq.remove();
             nodes[0] = Node{
@@ -174,8 +180,8 @@ pub const HuffmanTree = struct {
                 .nodes = nodes,
                 .root = &nodes[0],
                 .allocator = allocator,
+                .encodingMap = try getOwnedEncodingMap(allocator, &nodes[0]),
             };
-            try ht.assignEncoding();
             return ht;
         } else {
             var idx = heap.pq.count(); //we start at heap's count because new nodes will be assigned to new indices
@@ -193,17 +199,18 @@ pub const HuffmanTree = struct {
                 try heap.pq.add(&nodes[idx]);
             }
 
+            const root = heap.pq.remove();
             const ht = HuffmanTree{
                 .nodes = nodes,
-                .root = heap.pq.remove(),
+                .root = root,
                 .allocator = allocator,
+                .encodingMap = try getOwnedEncodingMap(allocator, root),
             };
             heap.deinit();
-            try ht.assignEncoding();
             return ht;
         }
     }
-    pub fn deinit(self: HuffmanTree) void {
+    pub fn deinit(self: *HuffmanTree) void {
         for (self.nodes) |node| {
             switch (node) {
                 .leafNode => {
@@ -212,30 +219,28 @@ pub const HuffmanTree = struct {
                 else => {},
             }
         }
+        self.encodingMap.deinit();
         self.allocator.free(self.nodes);
     }
 
-    //TODO compression: from bytes -> encoding
-    //  byte -> freqmap lookup -> freq to encoding (this is TODO)
-    //decompression: encoding -> bytes
-    // consume encoding -> find byte (TODO) . traverse huffmantree?
-    // problem during decompression: how do we know encoding for a given byte ended? do we need delimiters (TODO)?
+    //For compression,  we need a map: from bytes -> encoding . With it we can encode each byte to bits
+    //  byte -> freqmap lookup -> freq to encoding (this is what we call encodingMap)
 
-    //Todo below will change, we won't save encoding on the node anymore, we'll collect them in a different map
-    //Below should return this new map. Map is owned by caller
-    fn assignEncoding(self: HuffmanTree) !void {
-        const node = self.root;
-        switch (node.*) {
+    //map is byte -> encoding
+    pub fn getOwnedEncodingMap(allocator: mem.Allocator, root: *Node) !std.AutoHashMap(u8, []const u8) {
+        var encodingMap = std.AutoHashMap(u8, []const u8).init(allocator);
+        switch (root.*) {
             .leafNode => {
-                try assignEncodingInternal(self.allocator, node, "0");
+                try buildEncodingInternal(allocator, &encodingMap, root, "0");
             },
             .nonLeafNode => {
-                try assignEncodingInternal(self.allocator, node.nonLeafNode.left, "0");
-                try assignEncodingInternal(self.allocator, node.nonLeafNode.right, "1");
+                try buildEncodingInternal(allocator, &encodingMap, root.nonLeafNode.left, "0");
+                try buildEncodingInternal(allocator, &encodingMap, root.nonLeafNode.right, "1");
             },
         }
+        return encodingMap;
     }
-    fn assignEncodingInternal(allocator: mem.Allocator, node: *Node, encoding: []const u8) !void {
+    fn buildEncodingInternal(allocator: mem.Allocator, encodingMap: *std.AutoHashMap(u8, []const u8), node: *Node, encoding: []const u8) !void {
         switch (node.*) {
             .leafNode => {
                 var encodingList = std.ArrayList(u8).init(allocator);
@@ -247,7 +252,8 @@ pub const HuffmanTree = struct {
                     try encodingList.append(ch);
                 }
                 const encodingSlice = try encodingList.toOwnedSlice();
-                node.leafNode.encoding = encodingSlice; //this memory is freed in deinit
+                node.leafNode.encoding = encodingSlice; //created final encoding slice's lifetime is managed by the huffmantree (freed in HuffmanTree.deinit())
+                try encodingMap.put(node.leafNode.charValue, encodingSlice);
             },
             .nonLeafNode => {
                 //avoiding heap allocation
@@ -266,8 +272,8 @@ pub const HuffmanTree = struct {
                 mem.copyForwards(u8, addOne[0..encoding.len], encoding);
                 addOne[encoding.len] = '1';
 
-                try assignEncodingInternal(allocator, node.nonLeafNode.left, addZero[0 .. encoding.len + 1]);
-                try assignEncodingInternal(allocator, node.nonLeafNode.right, addOne[0 .. encoding.len + 1]);
+                try buildEncodingInternal(allocator, encodingMap, node.nonLeafNode.left, addZero[0 .. encoding.len + 1]);
+                try buildEncodingInternal(allocator, encodingMap, node.nonLeafNode.right, addOne[0 .. encoding.len + 1]);
             },
         }
     }

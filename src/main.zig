@@ -11,6 +11,12 @@ const HuffmanError = @import("types.zig").HuffmanError;
 const MAX_FILE_SIZE: usize = 100000000;
 const HEADER_DELIMITER: u8 = '#';
 
+fn printMap(map: *std.AutoHashMap(u8, []const u8)) void {
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        print("key: {c} value: {s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+    }
+}
 //Format: [1byte key][up to 10 byte value][;][1byte key][up to 10 byte value][;]...
 // 10 byte because 2^32 has 10 digits
 // TODO encoding matters after all!
@@ -107,9 +113,11 @@ fn processBytes(allocator: mem.Allocator, bytes: []u8, outputFileName: []const u
     var freqMap = try buildFrequencyMap(allocator, bytes);
     defer freqMap.deinit();
 
-    const ht = try HuffmanTree.init(allocator, &freqMap);
+    var ht = try HuffmanTree.init(allocator, &freqMap);
     defer ht.deinit();
+
     ht.root.printSubtree();
+    printMap(&ht.encodingMap);
 
     try serializeFreqMap(&freqMap, outputFileName);
 }
@@ -263,8 +271,9 @@ test "huffman tree test" {
     var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b' };
     var freqMap = try buildFrequencyMap(allocator, &bytes);
     defer freqMap.deinit();
-    const ht = try HuffmanTree.init(allocator, &freqMap);
+    var ht = try HuffmanTree.init(allocator, &freqMap);
     defer ht.deinit();
+    printMap(&ht.encodingMap);
     ht.root.printSubtree();
 }
 
@@ -282,7 +291,7 @@ test "ui example test" {
     try freqMap.put('U', 37);
     try freqMap.put('Z', 2);
 
-    const ht = try HuffmanTree.init(allocator, &freqMap);
+    var ht = try HuffmanTree.init(allocator, &freqMap);
     defer ht.deinit();
     ht.root.printSubtree();
 }
