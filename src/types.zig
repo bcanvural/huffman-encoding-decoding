@@ -230,6 +230,7 @@ pub const HuffmanTree = struct {
     //so: grab 8 bits from the pool?write it as char and continue?some encodings will straddle char boundries
 
     //map is byte -> encoding
+    //todo change name, rmeove "get": getSomething() methods shouldn't have side effects
     pub fn getOwnedEncodingMap(allocator: mem.Allocator, root: *Node) !std.AutoHashMap(u8, []const u8) {
         var encodingMap = std.AutoHashMap(u8, []const u8).init(allocator);
         switch (root.*) {

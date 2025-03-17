@@ -118,7 +118,7 @@ test "slicetest" {
 
 //TODO
 //encodingmap contains byte array of bit strings (e.g. 1110 as 4 bytes: 1, 1, 1, and 0)
-//we want to convert that to 1110 as bits, so in above example we'd fit 2 of such stirngs into 1 char (8 bytes)
+//we want to convert that to 1110 as bits, so in above example we'd fit 2 of such stirngs into 1 char (8 bits = 1 byte)
 //algo:
 //read 1 byte from intput file
 //find the encoding of that byte using encodingMap
@@ -134,9 +134,31 @@ fn encodingMaptoRawBytes(
     inputFile: fs.File,
 ) ![]u8 {
     _ = allocator;
-    _ = encodingMap;
-    _ = inputFile;
+    // _ = encodingMap;
+    // _ = inputFile;
+
+    var done = false;
+    while (!done) {
+        const fileCharBuf: [1024]u8 = undefined;
+        try inputFile.read(fileCharBuf);
+        var bufIdx: usize = 0;
+        while (bufIdx < fileCharBuf.len) {
+            const encoding = encodingMap.get(fileCharBuf[bufIdx]);
+            if (encoding.len > @sizeOf(u8)) {}
+            bufIdx += 1;
+        }
+        done = false;
+    }
 }
+
+//pre: bitStr len is 8
+// fn bitStrToChar(bitStr: []const u8) u8 {
+//     var finalCh: ch = 0;
+//
+//     for(bitStr) |bit| switch(bit){
+//         '0' => finalCh = finalCh << 1
+//     }
+// }
 
 fn processBytes(allocator: mem.Allocator, bytes: []u8, outputFileName: []const u8) !void {
     var freqMap = try buildFrequencyMap(allocator, bytes);
@@ -188,7 +210,7 @@ pub const ArgsResult = struct {
     outputFileName: []u8,
 };
 
-fn processArgs(args: [][]u8) !ArgsResult {
+fn processArgs(args: [][:0]u8) !ArgsResult {
     if (args.len < 4) {
         return HuffmanError.MissingFileNameError;
     }
@@ -253,11 +275,11 @@ pub fn main() !void {
 
 test "processargs" {
     const allocator = std.testing.allocator;
-    var fakeArgs = [_][]u8{
-        try allocator.dupe(u8, "huffman-encoding-decoding"),
-        try allocator.dupe(u8, "-c"),
-        try allocator.dupe(u8, "tests/book.txt"),
-        try allocator.dupe(u8, "output"),
+    var fakeArgs = [_][:0]u8{
+        try allocator.dupeZ(u8, "huffman-encoding-decoding"),
+        try allocator.dupeZ(u8, "-c"),
+        try allocator.dupeZ(u8, "tests/book.txt"),
+        try allocator.dupeZ(u8, "output"),
     };
     defer allocator.free(fakeArgs[0]);
     defer allocator.free(fakeArgs[1]);
