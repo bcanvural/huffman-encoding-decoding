@@ -1,6 +1,6 @@
 # Huffman Encoding and Decoding
 
-This project implements Huffman encoding and decoding algorithms using the Zig programming language.
+This project implements a file compression tool using Huffman encoding and decoding algorithms using the Zig programming language.
 
 ## Requirements
 
@@ -21,8 +21,10 @@ zig build
 After building, you can run the project using:
 
 ```bash
-zig build run
+zig build run -- -c inputfilename outputfilename
 ```
+
+-c for compression, -d for decompression
 
 ## License
 
