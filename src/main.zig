@@ -106,25 +106,27 @@ fn compress(
     inputFile: fs.File,
     outputFile: fs.File,
 ) !void {
-    var done = false;
     var compressedList = std.ArrayList(u8).init(allocator); //we collect compressed chars here
     defer compressedList.deinit();
     var encodingsList = std.ArrayList(u8).init(allocator);
     defer encodingsList.deinit();
-    var remainder: usize = 0; //how many bits we left untouched in the last compressedChar. Will be written as char in the last byte.
-    while (!done) {
+    var remainder: usize = 0; //how many bits we processed in the last compressedChar. Will be written as char in the last byte.
+    while (true) {
         var fileCharBuf: [1024]u8 = undefined;
         const readCount = try inputFile.read(&fileCharBuf);
+        print("readCount: {d}\n", .{readCount});
         if (readCount < 1024) {
-            done = true; //this is our last iteration
+            try rawBytesToCompressedList(fileCharBuf[0..readCount], ht, &encodingsList, &compressedList);
+            break;
         }
-        try rawBytesToCompressedList(allocator, &fileCharBuf, ht, &compressedList);
+        try rawBytesToCompressedList(&fileCharBuf, ht, &encodingsList, &compressedList);
     }
     //if we still have leftovers (we can, up to 8 items)
     if (encodingsList.items.len > 0) {
         print("There were some leftovers!\n", .{});
-        try rawBytesToCompressedList(allocator, encodingsList.items[0..encodingsList.items.len], ht, &compressedList);
         remainder = encodingsList.items.len; //remember this field! we'll write it to the outputfile so we can read it during decompression
+        const compressed = bitStrToChar(encodingsList.items[0..encodingsList.items.len]);
+        try compressedList.append(compressed);
     }
     //write all the compressed chars
     //TODO don't keep all in memory, do partial writes
@@ -135,9 +137,10 @@ fn compress(
 }
 
 //the caller already knows the remainder
-fn rawBytesToCompressedList(allocator: mem.Allocator, rawBytes: []u8, ht: HuffmanTree, compressedList: *std.ArrayList(u8)) !void {
-    var encodingsList = std.ArrayList(u8).init(allocator);
-    defer encodingsList.deinit(); //TODO take this from outside
+//Go through each byte, find its encoding from the encodingmap
+//flatten each ending bit string to the encodingsList list
+//if encodingsList surpassed >8 items consume and compress, collect compressed chars in compressedList
+fn rawBytesToCompressedList(rawBytes: []u8, ht: HuffmanTree, encodingsList: *std.ArrayList(u8), compressedList: *std.ArrayList(u8)) !void {
     var bufIdx: usize = 0;
     while (bufIdx < rawBytes.len) : (bufIdx += 1) {
         const byte = rawBytes[bufIdx];
@@ -148,37 +151,32 @@ fn rawBytesToCompressedList(allocator: mem.Allocator, rawBytes: []u8, ht: Huffma
         }
         //if encodingsList has grown just above 8 we take a brake and compress those.
         //We'll only process 8 at a time, we don't have to worry about "remainders" just yet
-        while (encodingsList.items.len > 8) {
+        while (encodingsList.items.len >= 8) {
             const compressed = bitStrToChar(encodingsList.items[0..8]);
             try compressedList.append(compressed);
-            shiftNthAndForwardsToBeginning(&encodingsList, 8);
+            shiftNthAndForwardsToBeginning(encodingsList, 8);
         }
-    }
-    //if we still have leftovers (we can, up to 8 items)
-    if (encodingsList.items.len > 0) {
-        const compressed = bitStrToChar(encodingsList.items[0..encodingsList.items.len]);
-        try compressedList.append(compressed);
     }
 }
 
 test "rawBytesToCompressedList" {
     const allocator = std.testing.allocator;
-    var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b', 'd', 'e', 'f' };
+    var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b', 'd', 'e', 'f', 'a' };
     //==Handcrafted example==
     //Running above bytes to generate huffman encodings we get below:
     // key: b value: 00
     // key: a value: 11
-    // key: c value: 100
-    // key: f value: 010
-    // key: e value: 101
-    // key: d value: 011
+    // key: c value: 101
+    // key: e value: 010
+    // key: f value: 011
+    // key: d value: 100
     //if we encode the bytes by hand using the encoding table above we get:
-    //a  a  a  c   b  b  d   e   f
-    //11 11 11 100 00 00 011 101 010
+    //a  a  a  c   b  b  d   e   f   a
+    //11 11 11 101 00 00 100 010 011 11
     //the compressed bits representation, grouped 8 at a time:
-    //11111110 00000011 101010(00)  <- last two zeroes are padding basically. Our remainder would be 2
+    //11111110 10000100 01001111
     //converting above bits to chars:
-    //0xFE 0x03 0xA8
+    //0xFE 0x84 0x4F
     var freqMap = try buildFrequencyMap(allocator, &bytes);
     defer freqMap.deinit();
     var ht = try HuffmanTree.init(allocator, &freqMap);
@@ -186,12 +184,15 @@ test "rawBytesToCompressedList" {
     printMap(&ht.encodingMap);
     var compressedList = std.ArrayList(u8).init(allocator);
     defer compressedList.deinit();
-    try rawBytesToCompressedList(allocator, &bytes, ht, &compressedList);
+
+    var encodingsList = std.ArrayList(u8).init(allocator);
+    defer encodingsList.deinit();
+    try rawBytesToCompressedList(&bytes, ht, &encodingsList, &compressedList);
 
     try std.testing.expectEqual(@as(usize, 3), compressedList.items.len);
     try std.testing.expectEqual(@as(u8, 0xFE), compressedList.items[0]);
-    try std.testing.expectEqual(@as(u8, 0x03), compressedList.items[1]);
-    try std.testing.expectEqual(@as(u8, 0xA8), compressedList.items[2]);
+    try std.testing.expectEqual(@as(u8, 0x84), compressedList.items[1]);
+    try std.testing.expectEqual(@as(u8, 0x4F), compressedList.items[2]);
 }
 
 //pre: remainder is < 8
