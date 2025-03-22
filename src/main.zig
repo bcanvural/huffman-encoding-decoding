@@ -9,7 +9,8 @@ const HuffmanTree = @import("types.zig").HuffmanTree;
 const HuffmanError = @import("types.zig").HuffmanError;
 
 const MAX_FILE_SIZE: usize = 100000000;
-const HEADER_DELIMITER: u8 = '#'; //TODO: this will potentially collide with the content
+//TODO: this will potentially collide with the content
+const HEADER_DELIMITER: u8 = '#';
 
 fn printMap(map: *std.AutoHashMap(u8, []const u8)) void {
     var it = map.iterator();
@@ -110,36 +111,19 @@ fn compress(
     defer compressedList.deinit();
     var encodingsList = std.ArrayList(u8).init(allocator);
     defer encodingsList.deinit();
-    var remainder: usize = undefined; //how many bits we left untouched in the last compressedChar. Will be written as char in the last byte.
+    var remainder: usize = 0; //how many bits we left untouched in the last compressedChar. Will be written as char in the last byte.
     while (!done) {
         var fileCharBuf: [1024]u8 = undefined;
         const readCount = try inputFile.read(&fileCharBuf);
         if (readCount < 1024) {
             done = true; //this is our last iteration
         }
-        var bufIdx: usize = 0;
-
-        while (bufIdx < fileCharBuf.len) : (bufIdx += 1) {
-            const fileChar = fileCharBuf[bufIdx];
-            const encoding = ht.encodingMap.get(fileChar) orelse return HuffmanError.ByteUnaccountedFor;
-            //flatten the encoding bits into encodingslist
-            for (encoding) |bitStr| {
-                try encodingsList.append(bitStr);
-            }
-            //if encodingsList has grown just above 8 we take a brake and compress those.
-            //We'll only process 8 at a time, we don't have to worry about "remainders" just yet
-            while (encodingsList.items.len > 8) {
-                const compressed = bitStrToChar(encodingsList.items[0..8]);
-                try compressedList.append(compressed);
-                shiftNthAndForwardsToBeginning(&encodingsList, 8);
-            }
-        }
+        try rawBytesToCompressedList(allocator, &fileCharBuf, ht, &compressedList);
     }
     //if we still have leftovers (we can, up to 8 items)
     if (encodingsList.items.len > 0) {
         print("There were some leftovers!\n", .{});
-        const compressed = bitStrToChar(encodingsList.items[0..encodingsList.items.len]);
-        try compressedList.append(compressed);
+        try rawBytesToCompressedList(allocator, encodingsList.items[0..encodingsList.items.len], ht, &compressedList);
         remainder = encodingsList.items.len; //remember this field! we'll write it to the outputfile so we can read it during decompression
     }
     //write all the compressed chars
@@ -150,7 +134,68 @@ fn compress(
     _ = try outputFile.write(&[_]u8{remainderInU8});
 }
 
-fn mod8RemainderToU8(remainder: usize) u8 {
+//the caller already knows the remainder
+fn rawBytesToCompressedList(allocator: mem.Allocator, rawBytes: []u8, ht: HuffmanTree, compressedList: *std.ArrayList(u8)) !void {
+    var encodingsList = std.ArrayList(u8).init(allocator);
+    defer encodingsList.deinit(); //TODO take this from outside
+    var bufIdx: usize = 0;
+    while (bufIdx < rawBytes.len) : (bufIdx += 1) {
+        const byte = rawBytes[bufIdx];
+        const encoding = ht.encodingMap.get(byte) orelse return HuffmanError.ByteUnaccountedFor;
+        //flatten the encoding bits into encodingslist
+        for (encoding) |bitStr| {
+            try encodingsList.append(bitStr);
+        }
+        //if encodingsList has grown just above 8 we take a brake and compress those.
+        //We'll only process 8 at a time, we don't have to worry about "remainders" just yet
+        while (encodingsList.items.len > 8) {
+            const compressed = bitStrToChar(encodingsList.items[0..8]);
+            try compressedList.append(compressed);
+            shiftNthAndForwardsToBeginning(&encodingsList, 8);
+        }
+    }
+    //if we still have leftovers (we can, up to 8 items)
+    if (encodingsList.items.len > 0) {
+        const compressed = bitStrToChar(encodingsList.items[0..encodingsList.items.len]);
+        try compressedList.append(compressed);
+    }
+}
+
+test "rawBytesToCompressedList" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b', 'd', 'e', 'f' };
+    //==Handcrafted example==
+    //Running above bytes to generate huffman encodings we get below:
+    // key: b value: 00
+    // key: a value: 11
+    // key: c value: 100
+    // key: f value: 010
+    // key: e value: 101
+    // key: d value: 011
+    //if we encode the bytes by hand using the encoding table above we get:
+    //a  a  a  c   b  b  d   e   f
+    //11 11 11 100 00 00 011 101 010
+    //the compressed bits representation, grouped 8 at a time:
+    //11111110 00000011 101010(00)  <- last two zeroes are padding basically. Our remainder would be 2
+    //converting above bits to chars:
+    //0xFE 0x03 0xA8
+    var freqMap = try buildFrequencyMap(allocator, &bytes);
+    defer freqMap.deinit();
+    var ht = try HuffmanTree.init(allocator, &freqMap);
+    defer ht.deinit();
+    printMap(&ht.encodingMap);
+    var compressedList = std.ArrayList(u8).init(allocator);
+    defer compressedList.deinit();
+    try rawBytesToCompressedList(allocator, &bytes, ht, &compressedList);
+
+    try std.testing.expectEqual(@as(usize, 3), compressedList.items.len);
+    try std.testing.expectEqual(@as(u8, 0xFE), compressedList.items[0]);
+    try std.testing.expectEqual(@as(u8, 0x03), compressedList.items[1]);
+    try std.testing.expectEqual(@as(u8, 0xA8), compressedList.items[2]);
+}
+
+//pre: remainder is < 8
+inline fn mod8RemainderToU8(remainder: usize) u8 {
     const nums = [_]u8{ '0', '1', '2', '3', '4', '5', '6', '7' };
     return nums[remainder];
 }
@@ -189,10 +234,8 @@ test "shiftNthAndForwardsToBeginning" {
 }
 
 // pre: bitStr len is 8
-// todo should this handle non-8 bit strings too?
 fn bitStrToChar(bitStr: []const u8) u8 {
     var finalCh: u8 = 0;
-
     //idea: we start with all 0s, if we need to flip a bit to 1,
     //we first construct a mask to target and flip that bit.
     for (bitStr, 0..) |bit, idx| switch (bit) {
