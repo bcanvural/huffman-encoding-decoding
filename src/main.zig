@@ -2,11 +2,12 @@ const std = @import("std");
 const mem = std.mem;
 const fs = std.fs;
 const print = std.debug.print;
-const Node = @import("types.zig").Node;
-const Heap = @import("types.zig").Heap;
+const assert = std.debug.assert;
 const FreqMap = @import("types.zig").FreqMap;
-const HuffmanTree = @import("types.zig").HuffmanTree;
+const Heap = @import("types.zig").Heap;
 const HuffmanError = @import("types.zig").HuffmanError;
+const HuffmanTree = @import("types.zig").HuffmanTree;
+const Node = @import("types.zig").Node;
 
 const MAX_FILE_SIZE: usize = 100000000;
 //TODO: this will potentially collide with the content
@@ -99,7 +100,6 @@ test "slicetest" {
     print("{d}\n", .{try std.fmt.parseInt(u32, sliced, 10)});
 }
 
-//pre: freqmap was serialized in the header before
 fn compress(
     allocator: mem.Allocator,
     ht: HuffmanTree,
@@ -133,7 +133,6 @@ fn compress(
     _ = try outputFile.write(&[_]u8{remainderInU8});
 }
 
-//the caller already knows the remainder
 //Go through each byte, find its encoding from the encodingmap
 //flatten each ending bit string to the encodingsList list
 //if encodingsList surpassed >8 items consume and compress, collect compressed chars in compressedList
@@ -193,6 +192,7 @@ test "rawBytesToCompressedList" {
 
 //pre: remainder is < 8
 inline fn mod8RemainderToU8(remainder: usize) u8 {
+    assert(remainder < 8);
     const nums = [_]u8{ '0', '1', '2', '3', '4', '5', '6', '7' };
     return nums[remainder];
 }
@@ -230,7 +230,6 @@ test "shiftNthAndForwardsToBeginning" {
     try std.testing.expectEqual(@as(u8, '2'), subject.items[1]);
 }
 
-// pre: bitStr len is 8
 fn bitStrToChar(bitStr: []const u8) u8 {
     var finalCh: u8 = 0;
     //idea: we start with all 0s, if we need to flip a bit to 1,
