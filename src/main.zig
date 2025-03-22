@@ -481,7 +481,6 @@ test "ui example test" {
 }
 
 test "file_test" {
-    print("------------\n", .{});
     const file = try fs.cwd().openFile("tests/book.txt", .{});
     const ally = std.testing.allocator;
     const book = try file.reader().readAllAlloc(ally, 10000000);
