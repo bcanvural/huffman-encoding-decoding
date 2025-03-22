@@ -114,16 +114,13 @@ fn compress(
     while (true) {
         var fileCharBuf: [1024]u8 = undefined;
         const readCount = try inputFile.read(&fileCharBuf);
-        print("readCount: {d}\n", .{readCount});
+        try rawBytesToCompressedList(fileCharBuf[0..readCount], ht, &encodingsList, &compressedList);
         if (readCount < 1024) {
-            try rawBytesToCompressedList(fileCharBuf[0..readCount], ht, &encodingsList, &compressedList);
             break;
         }
-        try rawBytesToCompressedList(&fileCharBuf, ht, &encodingsList, &compressedList);
     }
     //if we still have leftovers (we can, up to 8 items)
     if (encodingsList.items.len > 0) {
-        print("There were some leftovers!\n", .{});
         remainder = encodingsList.items.len; //remember this field! we'll write it to the outputfile so we can read it during decompression
         const compressed = bitStrToChar(encodingsList.items[0..encodingsList.items.len]);
         try compressedList.append(compressed);
@@ -181,7 +178,6 @@ test "rawBytesToCompressedList" {
     defer freqMap.deinit();
     var ht = try HuffmanTree.init(allocator, &freqMap);
     defer ht.deinit();
-    printMap(&ht.encodingMap);
     var compressedList = std.ArrayList(u8).init(allocator);
     defer compressedList.deinit();
 
@@ -282,26 +278,33 @@ test "bitstrtochar" {
     }
 }
 
-fn processBytes(allocator: mem.Allocator, bytes: []u8, outputFileName: []const u8) !void {
-    var freqMap = try buildFrequencyMap(allocator, bytes);
-    defer freqMap.deinit();
+fn handleCommand(allocator: mem.Allocator, config: Config) !void {
+    switch (config.operation) {
+        Operation.Compression => {
+            const file = try fs.cwd().openFile(config.inputFileName, .{});
+            const bytes = try file.reader().readAllAlloc(allocator, MAX_FILE_SIZE);
+            defer allocator.free(bytes);
 
-    var ht = try HuffmanTree.init(allocator, &freqMap);
-    defer ht.deinit();
+            var freqMap = try buildFrequencyMap(allocator, bytes);
+            defer freqMap.deinit();
 
-    ht.root.printSubtree();
-    printMap(&ht.encodingMap);
+            var ht = try HuffmanTree.init(allocator, &freqMap);
+            defer ht.deinit();
 
-    //TODO file management is a bit all over the place
-    const inputFile = try openFile("tests/book.txt", .{ .mode = .read_only });
-    defer inputFile.close();
+            const inputFile = try openFile(config.inputFileName, .{ .mode = .read_only });
+            defer inputFile.close();
 
-    const outputFile = try fs.cwd().createFile(outputFileName, .{
-        .read = true,
-    });
-    defer outputFile.close();
-    try serializeFreqMap(&freqMap, outputFile);
-    try compress(allocator, ht, inputFile, outputFile);
+            const outputFile = try fs.cwd().createFile(config.outputFileName, .{
+                .read = true,
+            });
+            defer outputFile.close();
+            try serializeFreqMap(&freqMap, outputFile);
+            try compress(allocator, ht, inputFile, outputFile);
+        },
+        Operation.Decompression => {
+            print("decompression not implemented yet.\n", .{});
+        },
+    }
 }
 //operates on the input file's text to construct the word frequency map for the first time.
 fn buildFrequencyMap(allocator: mem.Allocator, bytes: []u8) !FreqMap {
@@ -335,13 +338,13 @@ pub const Operation = enum {
         }
     }
 };
-pub const ArgsResult = struct {
+pub const Config = struct {
     operation: Operation,
-    inputFileName: []u8,
-    outputFileName: []u8,
+    inputFileName: []const u8,
+    outputFileName: []const u8,
 };
 
-fn processArgs(args: [][:0]u8) !ArgsResult {
+fn processArgs(args: [][:0]u8) !Config {
     if (args.len < 4) {
         return HuffmanError.MissingFileNameError;
     }
@@ -371,7 +374,7 @@ fn processArgs(args: [][:0]u8) !ArgsResult {
     if (outputFileName.len == 0) {
         return HuffmanError.InvalidInputFileNameError;
     }
-    return ArgsResult{
+    return Config{
         .operation = operation,
         .inputFileName = inputFileName,
         .outputFileName = outputFileName,
@@ -382,7 +385,7 @@ pub fn main() !void {
     const allocator = std.heap.page_allocator;
     const args = try std.process.argsAlloc(std.heap.page_allocator);
     defer std.process.argsFree(allocator, args);
-    const argsResult = processArgs(args) catch |err| switch (err) {
+    const config = processArgs(args) catch |err| switch (err) {
         HuffmanError.InvalidInputFileNameError, HuffmanError.InvalidOutputFileNameError, HuffmanError.InvalidOperationError => {
             print("Usage: <program> <input_file> <output_file>\n", .{});
             return;
@@ -394,14 +397,14 @@ pub fn main() !void {
         else => return err,
     };
 
-    print("Operation:{s}\n", .{argsResult.operation.toStr()});
-    print("Input file: {s}\n", .{argsResult.inputFileName});
-    print("Output file: {s}\n", .{argsResult.outputFileName});
+    print("Operation:{s}\n", .{config.operation.toStr()});
+    print("Input file: {s}\n", .{config.inputFileName});
+    print("Output file: {s}\n", .{config.outputFileName});
 
-    const file = try openFile(argsResult.inputFileName, .{ .mode = .read_only });
+    const file = try openFile(config.inputFileName, .{ .mode = .read_only });
     const raw_bytes = try file.readToEndAlloc(allocator, MAX_FILE_SIZE);
     defer allocator.free(raw_bytes);
-    try processBytes(allocator, raw_bytes, argsResult.outputFileName);
+    try handleCommand(allocator, config);
 }
 
 test "processargs" {
@@ -416,10 +419,10 @@ test "processargs" {
     defer allocator.free(fakeArgs[1]);
     defer allocator.free(fakeArgs[2]);
     defer allocator.free(fakeArgs[3]);
-    const argsResult = try processArgs(&fakeArgs);
-    try std.testing.expectEqual(Operation.Compression, argsResult.operation);
-    try std.testing.expectEqualStrings("tests/book.txt", argsResult.inputFileName);
-    try std.testing.expectEqualStrings("output", argsResult.outputFileName);
+    const config = try processArgs(&fakeArgs);
+    try std.testing.expectEqual(Operation.Compression, config.operation);
+    try std.testing.expectEqualStrings("tests/book.txt", config.inputFileName);
+    try std.testing.expectEqualStrings("output", config.outputFileName);
 }
 
 test "build frequency map" {
@@ -484,5 +487,8 @@ test "file_test" {
     const ally = std.testing.allocator;
     const book = try file.reader().readAllAlloc(ally, 10000000);
     defer ally.free(book);
-    try processBytes(ally, book, "output");
+    try handleCommand(
+        ally,
+        .{ .inputFileName = "tests/book.txt", .operation = Operation.Compression, .outputFileName = "output" },
+    );
 }
