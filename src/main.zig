@@ -111,7 +111,9 @@ fn compress(
     defer compressedList.deinit();
     var encodingsList = std.ArrayList(u8).init(allocator);
     defer encodingsList.deinit(); //we collect all encoding bits in order here
-    var remainder: usize = 0; //how many bits we processed in the last compressedChar. Will be written as char in the last byte.
+    //how many bits we processed in the last compressedChar, written as char in the last byte.
+    //will be useful during decompression
+    var remainder: usize = 0;
     while (true) {
         var fileCharBuf: [1024]u8 = undefined;
         const readCount = try inputFile.read(&fileCharBuf);
@@ -282,12 +284,14 @@ test "bitstrtochar" {
 fn handleCommand(allocator: mem.Allocator, config: Config) !void {
     switch (config.operation) {
         Operation.Compression => {
-            const file = try fs.cwd().openFile(config.inputFileName, .{});
+            const inputFile = try openFile(config.inputFileName, .{ .mode = .read_only });
+            defer inputFile.close();
+
             var freqMap = FreqMap.init(allocator);
             defer freqMap.deinit();
             while (true) {
                 var buf: [1024]u8 = undefined;
-                const readCount = try file.read(&buf);
+                const readCount = try inputFile.read(&buf);
                 try buildFrequencyMap(&freqMap, buf[0..readCount]);
                 if (readCount < 1024) {
                     break;
@@ -297,13 +301,11 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
             var ht = try HuffmanTree.init(allocator, &freqMap);
             defer ht.deinit();
 
-            const inputFile = try openFile(config.inputFileName, .{ .mode = .read_only });
-            defer inputFile.close();
-
             const outputFile = try fs.cwd().createFile(config.outputFileName, .{
                 .read = true,
             });
             defer outputFile.close();
+
             try serializeFreqMap(&freqMap, outputFile);
             try compress(allocator, ht, inputFile, outputFile);
         },
