@@ -44,7 +44,8 @@ fn readCompressedFileHeader(allocator: mem.Allocator, inputFile: fs.File) ![]u8 
 test "serializeFreqMap / readCompressedFileHeader / deserializeFrequencyMap tests" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{ 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'c', 'b', 'b' };
-    var freqMap = try buildFrequencyMap(allocator, &bytes);
+    var freqMap = FreqMap.init(allocator);
+    try buildFrequencyMap(&freqMap, &bytes);
     defer freqMap.deinit();
     const outputFileName = "serializeFreqMapTest";
     const outputFile = try fs.cwd().createFile(outputFileName, .{
@@ -109,7 +110,7 @@ fn compress(
     var compressedList = std.ArrayList(u8).init(allocator); //we collect compressed chars here
     defer compressedList.deinit();
     var encodingsList = std.ArrayList(u8).init(allocator);
-    defer encodingsList.deinit();
+    defer encodingsList.deinit(); //we collect all encoding bits in order here
     var remainder: usize = 0; //how many bits we processed in the last compressedChar. Will be written as char in the last byte.
     while (true) {
         var fileCharBuf: [1024]u8 = undefined;
@@ -173,7 +174,8 @@ test "rawBytesToCompressedList" {
     //11111110 10000100 01001111
     //converting above bits to chars:
     //0xFE 0x84 0x4F
-    var freqMap = try buildFrequencyMap(allocator, &bytes);
+    var freqMap = FreqMap.init(allocator);
+    try buildFrequencyMap(&freqMap, &bytes);
     defer freqMap.deinit();
     var ht = try HuffmanTree.init(allocator, &freqMap);
     defer ht.deinit();
@@ -281,11 +283,16 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
     switch (config.operation) {
         Operation.Compression => {
             const file = try fs.cwd().openFile(config.inputFileName, .{});
-            const bytes = try file.reader().readAllAlloc(allocator, MAX_FILE_SIZE);
-            defer allocator.free(bytes);
-
-            var freqMap = try buildFrequencyMap(allocator, bytes);
+            var freqMap = FreqMap.init(allocator);
             defer freqMap.deinit();
+            while (true) {
+                var buf: [1024]u8 = undefined;
+                const readCount = try file.read(&buf);
+                try buildFrequencyMap(&freqMap, buf[0..readCount]);
+                if (readCount < 1024) {
+                    break;
+                }
+            }
 
             var ht = try HuffmanTree.init(allocator, &freqMap);
             defer ht.deinit();
@@ -305,18 +312,16 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
         },
     }
 }
-//operates on the input file's text to construct the word frequency map for the first time.
-fn buildFrequencyMap(allocator: mem.Allocator, bytes: []u8) !FreqMap {
-    var frequencyMap = FreqMap.init(allocator);
+//Processes passed in bytes, updates frequency info in caller-managed word frequency map
+fn buildFrequencyMap(freqMap: *FreqMap, bytes: []u8) !void {
     for (bytes) |ch| {
-        const entry = try frequencyMap.getOrPut(ch);
+        const entry = try freqMap.getOrPut(ch);
         if (entry.found_existing) {
             entry.value_ptr.* += 1;
         } else {
             entry.value_ptr.* = 1;
         }
     }
-    return frequencyMap;
 }
 
 fn openFile(filename: []const u8, flags: fs.File.OpenFlags) !fs.File {
@@ -425,8 +430,10 @@ test "processargs" {
 }
 
 test "build frequency map" {
+    const allocator = std.testing.allocator;
     var bytes = [_]u8{ 'a', 'b', 'c', 'a' };
-    var freqMap = try buildFrequencyMap(std.testing.allocator, &bytes);
+    var freqMap = FreqMap.init(allocator);
+    try buildFrequencyMap(&freqMap, &bytes);
     defer freqMap.deinit();
     try std.testing.expectEqual(@as(u32, 2), freqMap.get('a').?);
     try std.testing.expectEqual(@as(u32, 1), freqMap.get('b').?);
@@ -436,7 +443,8 @@ test "build frequency map" {
 test "small_heap" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b' };
-    var freqMap = try buildFrequencyMap(allocator, &bytes);
+    var freqMap = FreqMap.init(allocator);
+    try buildFrequencyMap(&freqMap, &bytes);
     defer freqMap.deinit();
     const nodes = try allocator.alloc(Node, freqMap.count());
     defer allocator.free(nodes);
@@ -453,7 +461,8 @@ test "small_heap" {
 test "huffman tree test" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b' };
-    var freqMap = try buildFrequencyMap(allocator, &bytes);
+    var freqMap = FreqMap.init(allocator);
+    try buildFrequencyMap(&freqMap, &bytes);
     defer freqMap.deinit();
     var ht = try HuffmanTree.init(allocator, &freqMap);
     defer ht.deinit();
