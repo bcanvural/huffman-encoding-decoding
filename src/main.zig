@@ -311,6 +311,24 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
         },
         Operation.Decompression => {
             print("decompression not implemented yet.\n", .{});
+            //deserializeFrequencyMap
+            const inputFile = try openFile(config.inputFileName, .{ .mode = .read_only });
+            defer inputFile.close();
+
+            const headerBytes = try readCompressedFileHeader(allocator, inputFile);
+            var freqMap = try deserializeFrequencyMap(allocator, headerBytes);
+            defer freqMap.deinit();
+            //read the remainder (last byte)
+            //build HuffmanTree
+            HuffmanTree.init(allocator, &freqMap);
+            //revert encodingMap? need encoding to byte.
+            //(Maybe huffmantree can be constructed with encodingMap for compresssion, but its inverse if it's for decompression)
+            //go through content, read in chunks (what size?)
+            //per chunk, go to encoding byte chunks (u8 -> [64]u8 ?) 64 is arbitrary but should be a multiple of 8
+            //try to get byte value from the "inverseEncodingMap" (todo find a good name for this map)
+            //  hmm we can't jsut use an inverted map bc we dont know where the boundaries are
+            //  we could try to brute force the map lookup until we find the byte value. or traverse tree
+            //
         },
     }
 }
@@ -327,7 +345,7 @@ fn buildFrequencyMap(freqMap: *FreqMap, bytes: []u8) !void {
 }
 
 fn openFile(filename: []const u8, flags: fs.File.OpenFlags) !fs.File {
-    if (!std.mem.startsWith(u8, filename, "/")) {
+    if (!mem.startsWith(u8, filename, "/")) {
         return try fs.cwd().openFile(filename, flags);
     } else {
         return try fs.openFileAbsolute(filename, flags);
@@ -407,9 +425,6 @@ pub fn main() !void {
     print("Input file: {s}\n", .{config.inputFileName});
     print("Output file: {s}\n", .{config.outputFileName});
 
-    const file = try openFile(config.inputFileName, .{ .mode = .read_only });
-    const raw_bytes = try file.readToEndAlloc(allocator, MAX_FILE_SIZE);
-    defer allocator.free(raw_bytes);
     try handleCommand(allocator, config);
 }
 
