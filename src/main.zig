@@ -183,14 +183,16 @@ fn decompress(
         //4096 will always be enough, because a byte has 8 bits so 256 possible combinations
         //encoding is related to the tree depth, we should be good with 4096
         //(we will quit program if not)
-        var fileCharBuf: [1024]u8 = undefined;
+        var fileCharBuf: [4096]u8 = undefined;
         const readCount = try inputFile.read(&fileCharBuf);
 
         for (fileCharBuf[0..readCount]) |fileChar| {
             try charToBitChars(fileChar, &encodingsList);
         }
         //attempt to find the decompressed chars (we may not every time, but that's ok)
-        try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedCharList);
+        while (try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedCharList)) {
+            print("Decompressed char count: {d}\n", .{decompressedCharList.items.len});
+        }
 
         //do something
         if (readCount < 1024) {
@@ -200,21 +202,17 @@ fn decompress(
     //per chunk, try to find encoding by traversing the map
     //  we process the chunk left to right, at any point we might find a leaf node. remember at which index this occurred
     //  copy the remainder to the beginning of the array, read more chunks until array is full again, reapeat.
-    //  what if we cant find a leafnode? should the buffer here be an arraylist? - tho
-    //
-    //try to get byte value from the "inverseEncodingMap" (todo find a good name for this map)
-    //  hmm we can't jsut use an inverted map bc we dont know where the boundaries are
-    //  we could try to brute force the map lookup until we find the byte value. or traverse tree
 
 }
 
 //processes encodingsList, if a leaf node is found shrinks it (retaining capacity)
 //writes decompressedChars to the decompressedCharList
-fn attemptFindLeafNodeCharFromEncodingBits(ht: HuffmanTree, encodingsList: *std.ArrayList(u8), decompressedCharList: *std.ArrayList(u8)) !void {
+fn attemptFindLeafNodeCharFromEncodingBits(ht: HuffmanTree, encodingsList: *std.ArrayList(u8), decompressedCharList: *std.ArrayList(u8)) !bool {
     //from encoding bits, find the leafnode and add its byte value to uncompressedList
     //remember the idx, and shift everything right of that idx to the beginning in encodingslist
     var current = ht.root;
     var idx: usize = 0;
+    var leafNodeFound = false;
     loop: while (idx < encodingsList.items.len) {
         const bit = encodingsList.items[idx];
         switch (current.*) {
@@ -241,8 +239,9 @@ fn attemptFindLeafNodeCharFromEncodingBits(ht: HuffmanTree, encodingsList: *std.
             //we processed everything, just shrink to 0
             encodingsList.shrinkRetainingCapacity(0);
         }
-        return;
+        leafNodeFound = true;
     }
+    return leafNodeFound;
 }
 
 fn handleCommand(allocator: mem.Allocator, config: Config) !void {
@@ -274,7 +273,6 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
             try compress(allocator, ht, inputFile, outputFile);
         },
         Operation.Decompression => {
-            print("decompression not implemented yet.\n", .{});
             //deserializeFrequencyMap
             const inputFile = try openFile(config.inputFileName, .{ .mode = .read_only });
             defer inputFile.close();
@@ -668,27 +666,32 @@ test "attemptFindLeafNodeCharFromEncodingBits" {
     var decompressedList = std.ArrayList(u8).init(allocator);
     defer decompressedList.deinit();
 
-    try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    var foundE = try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    try std.testing.expect(foundE);
     try std.testing.expectEqual(@as(usize, 1), decompressedList.items.len);
     try std.testing.expectEqual(@as(usize, 11), encodingsList.items.len);
     try std.testing.expectEqual('E', decompressedList.items[0]);
 
-    try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    const foundU = try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    try std.testing.expect(foundU);
     try std.testing.expectEqual(@as(usize, 2), decompressedList.items.len);
     try std.testing.expectEqual(@as(usize, 8), encodingsList.items.len);
     try std.testing.expectEqual('U', decompressedList.items[1]);
 
-    try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    const foundL = try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    try std.testing.expect(foundL);
     try std.testing.expectEqual(@as(usize, 3), decompressedList.items.len);
     try std.testing.expectEqual(@as(usize, 5), encodingsList.items.len);
     try std.testing.expectEqual('L', decompressedList.items[2]);
 
-    try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    foundE = try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    try std.testing.expect(foundE);
     try std.testing.expectEqual(@as(usize, 4), decompressedList.items.len);
     try std.testing.expectEqual(@as(usize, 4), encodingsList.items.len);
     try std.testing.expectEqual('E', decompressedList.items[3]);
 
-    try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    const foundC = try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    try std.testing.expect(foundC);
     try std.testing.expectEqual(@as(usize, 5), decompressedList.items.len);
     try std.testing.expectEqual(@as(usize, 0), encodingsList.items.len);
     try std.testing.expectEqual('C', decompressedList.items[4]);
