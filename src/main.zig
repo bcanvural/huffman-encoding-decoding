@@ -13,12 +13,6 @@ const MAX_FILE_SIZE: usize = 100000000;
 //TODO: this will potentially collide with the content
 const HEADER_DELIMITER: u8 = '#';
 
-fn printMap(map: *std.AutoHashMap(u8, []const u8)) void {
-    var it = map.iterator();
-    while (it.next()) |entry| {
-        print("key: {c} value: {s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-    }
-}
 //Format: [1byte key][up to 10 byte value][;][1byte key][up to 10 byte value][;]...
 // 10 byte because 2^32 has 10 digits
 fn serializeFreqMap(freqMap: *FreqMap, outputFile: fs.File) !void {
@@ -39,33 +33,6 @@ fn readCompressedFileHeader(allocator: mem.Allocator, inputFile: fs.File) ![]u8 
     var charList = std.ArrayList(u8).init(allocator);
     try inputFile.reader().readUntilDelimiterArrayList(&charList, HEADER_DELIMITER, 1024);
     return try charList.toOwnedSlice();
-}
-
-test "serializeFreqMap / readCompressedFileHeader / deserializeFrequencyMap tests" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{ 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'c', 'b', 'b' };
-    var freqMap = FreqMap.init(allocator);
-    try buildFrequencyMap(&freqMap, &bytes);
-    defer freqMap.deinit();
-    const outputFileName = "serializeFreqMapTest";
-    const outputFile = try fs.cwd().createFile(outputFileName, .{
-        .read = true,
-    });
-    defer outputFile.close();
-    try serializeFreqMap(&freqMap, outputFile);
-    const raw_bytes = try readCompressedFileHeader(allocator, outputFile);
-    defer allocator.free(raw_bytes);
-    const expected_bytes = [_]u8{ 'b', '2', ';', 'a', '1', '0', ';', 'c', '1', ';' };
-    try std.testing.expectEqual(expected_bytes.len, raw_bytes.len);
-    for (0..expected_bytes.len) |idx| {
-        try std.testing.expectEqual(expected_bytes[idx], raw_bytes[idx]);
-    }
-    var deserializedFreqMap = try deserializeFrequencyMap(allocator, raw_bytes);
-    defer deserializedFreqMap.deinit();
-
-    try std.testing.expectEqual(@as(u32, 2), deserializedFreqMap.get('b').?);
-    try std.testing.expectEqual(@as(u32, 10), deserializedFreqMap.get('a').?);
-    try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('c').?);
 }
 
 //parses the word frequency map from a previously compressed file
@@ -93,12 +60,6 @@ fn deserializeFrequencyMap(allocator: mem.Allocator, bytes: []u8) !FreqMap {
         idx = subIdx + 1;
     }
     return freqmap;
-}
-
-test "slicetest" {
-    const testBytes = [_]u8{ 'b', '2', ';', 'a', '1', '0', ';', 'c', '1', ';' };
-    const sliced = testBytes[1..2];
-    print("{d}\n", .{try std.fmt.parseInt(u32, sliced, 10)});
 }
 
 fn compress(
@@ -158,42 +119,6 @@ fn rawBytesToCompressedList(rawBytes: []u8, ht: HuffmanTree, encodingsList: *std
     }
 }
 
-test "rawBytesToCompressedList" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b', 'd', 'e', 'f', 'a' };
-    //==Handcrafted example==
-    //Running above bytes to generate huffman encodings we get below:
-    // key: b value: 00
-    // key: a value: 11
-    // key: c value: 101
-    // key: e value: 010
-    // key: f value: 011
-    // key: d value: 100
-    //if we encode the bytes by hand using the encoding table above we get:
-    //a  a  a  c   b  b  d   e   f   a
-    //11 11 11 101 00 00 100 010 011 11
-    //the compressed bits representation, grouped 8 at a time:
-    //11111110 10000100 01001111
-    //converting above bits to chars:
-    //0xFE 0x84 0x4F
-    var freqMap = FreqMap.init(allocator);
-    try buildFrequencyMap(&freqMap, &bytes);
-    defer freqMap.deinit();
-    var ht = try HuffmanTree.init(allocator, &freqMap);
-    defer ht.deinit();
-    var compressedList = std.ArrayList(u8).init(allocator);
-    defer compressedList.deinit();
-
-    var encodingsList = std.ArrayList(u8).init(allocator);
-    defer encodingsList.deinit();
-    try rawBytesToCompressedList(&bytes, ht, &encodingsList, &compressedList);
-
-    try std.testing.expectEqual(@as(usize, 3), compressedList.items.len);
-    try std.testing.expectEqual(@as(u8, 0xFE), compressedList.items[0]);
-    try std.testing.expectEqual(@as(u8, 0x84), compressedList.items[1]);
-    try std.testing.expectEqual(@as(u8, 0x4F), compressedList.items[2]);
-}
-
 //pre: remainder is < 8
 inline fn mod8RemainderToU8(remainder: usize) u8 {
     assert(remainder < 8);
@@ -206,32 +131,6 @@ fn shiftNthAndForwardsToBeginning(list: *std.ArrayList(u8), n: usize) void {
     const remainderSlice = list.items[n..list.items.len];
     mem.copyForwards(u8, list.items[0..remainderSlice.len], remainderSlice);
     list.shrinkRetainingCapacity(remainderSlice.len);
-}
-
-test "shiftNthAndForwardsToBeginning" {
-    const allocator = std.testing.allocator;
-    var subject = std.ArrayList(u8).init(allocator);
-    defer subject.deinit();
-
-    try subject.append('1');
-    try subject.append('2');
-    try subject.append('3');
-    try subject.append('4');
-
-    shiftNthAndForwardsToBeginning(&subject, 2);
-
-    try std.testing.expectEqual(@as(i32, 2), subject.items.len);
-    try std.testing.expectEqual(@as(u8, '3'), subject.items[0]);
-    try std.testing.expectEqual(@as(u8, '4'), subject.items[1]);
-
-    try subject.append('1');
-    try subject.append('2');
-    try std.testing.expectEqual(@as(i32, 4), subject.items.len);
-
-    shiftNthAndForwardsToBeginning(&subject, 2);
-    try std.testing.expectEqual(@as(i32, 2), subject.items.len);
-    try std.testing.expectEqual(@as(u8, '1'), subject.items[0]);
-    try std.testing.expectEqual(@as(u8, '2'), subject.items[1]);
 }
 
 fn bitStrToChar(bitStr: []const u8) u8 {
@@ -249,35 +148,100 @@ fn bitStrToChar(bitStr: []const u8) u8 {
     return finalCh;
 }
 
-test "bitstrtochar" {
-    const TestCase = struct {
-        subject: []const u8,
-        expected: u8,
-    };
-    const testCases = &[_]TestCase{
-        .{
-            .subject = &[_]u8{ '1', '1', '1', '1', '1', '1', '1', '1' },
-            .expected = 0xFF,
-        },
-        .{
-            .subject = &[_]u8{ '0', '0', '0', '1', '1', '1', '1', '1' },
-            .expected = 0x1F,
-        },
-        .{
-            .subject = &[_]u8{ '0', '0', '0', '0', '0', '0', '0', '1' },
-            .expected = 0x01,
-        },
-        .{
-            .subject = &[_]u8{ '0', '0', '0', '0', '1', '0', '1', '1' },
-            .expected = 0x0B,
-        },
-        .{
-            .subject = &[_]u8{ '0', '0', '0', '0', '0', '0', '0', '0' },
-            .expected = 0x00,
-        },
-    };
-    for (testCases) |testCase| {
-        try std.testing.expectEqual(testCase.expected, bitStrToChar(testCase.subject));
+//adds bits of char as individual bytes and appends them to out param
+//e.g. 0xFF -> '1' * 8 added to outEncodingList
+fn charToBitChars(ch: u8, outEncodingList: *std.ArrayList(u8)) !void {
+    for (0..8) |idx| {
+        const mask = @as(u8, 1) << @intCast(7 - idx); //construct a byte where only the target idx is 1
+        const masked = (ch & mask) >> @intCast(7 - idx); //find out what the target idx is, and shift it all way the way right to check what it is
+        switch (masked) {
+            0x00 => try outEncodingList.append('0'),
+            0x01 => try outEncodingList.append('1'),
+            else => unreachable,
+        }
+    }
+    return;
+}
+
+fn decompress(
+    allocator: mem.Allocator,
+    ht: HuffmanTree,
+    inputFile: fs.File,
+    outputFile: fs.File,
+) !void {
+    // _ = allocator;
+    // _ = ht;
+    // _ = inputFile;
+    _ = outputFile;
+
+    var encodingsList = std.ArrayList(u8).init(allocator);
+    defer encodingsList.deinit();
+    var decompressedCharList = std.ArrayList(u8).init(allocator);
+    defer decompressedCharList.deinit();
+    //go through content, read in chunks (what size?)
+    while (true) {
+        //4096 will always be enough, because a byte has 8 bits so 256 possible combinations
+        //encoding is related to the tree depth, we should be good with 4096
+        //(we will quit program if not)
+        var fileCharBuf: [1024]u8 = undefined;
+        const readCount = try inputFile.read(&fileCharBuf);
+
+        for (fileCharBuf[0..readCount]) |fileChar| {
+            try charToBitChars(fileChar, &encodingsList);
+        }
+        //attempt to find the decompressed chars (we may not every time, but that's ok)
+        try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedCharList);
+
+        //do something
+        if (readCount < 1024) {
+            break;
+        }
+    }
+    //per chunk, try to find encoding by traversing the map
+    //  we process the chunk left to right, at any point we might find a leaf node. remember at which index this occurred
+    //  copy the remainder to the beginning of the array, read more chunks until array is full again, reapeat.
+    //  what if we cant find a leafnode? should the buffer here be an arraylist? - tho
+    //
+    //try to get byte value from the "inverseEncodingMap" (todo find a good name for this map)
+    //  hmm we can't jsut use an inverted map bc we dont know where the boundaries are
+    //  we could try to brute force the map lookup until we find the byte value. or traverse tree
+
+}
+
+//processes encodingsList, if a leaf node is found shrinks it (retaining capacity)
+//writes decompressedChars to the decompressedCharList
+fn attemptFindLeafNodeCharFromEncodingBits(ht: HuffmanTree, encodingsList: *std.ArrayList(u8), decompressedCharList: *std.ArrayList(u8)) !void {
+    //from encoding bits, find the leafnode and add its byte value to uncompressedList
+    //remember the idx, and shift everything right of that idx to the beginning in encodingslist
+    var current = ht.root;
+    var idx: usize = 0;
+    loop: while (idx < encodingsList.items.len) {
+        const bit = encodingsList.items[idx];
+        switch (current.*) {
+            .nonLeafNode => {
+                switch (bit) {
+                    '0' => current = current.*.nonLeafNode.left,
+                    '1' => current = current.*.nonLeafNode.right,
+                    else => unreachable,
+                }
+                idx += 1;
+            },
+            .leafNode => {
+                break :loop;
+            },
+        }
+    }
+    if (current.* == .leafNode) {
+        const decompressed = current.*.leafNode.charValue;
+        try decompressedCharList.append(decompressed);
+        if (idx != encodingsList.items.len - 1) {
+            //there are still unprocessed items, let's move them to the beginning
+            shiftNthAndForwardsToBeginning(encodingsList, idx);
+        } else {
+            //we processed everything, just shrink to 0
+            encodingsList.shrinkRetainingCapacity(0);
+        }
+        return;
     }
 }
 
@@ -303,7 +267,7 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
 
             const outputFile = try fs.cwd().createFile(config.outputFileName, .{
                 .read = true,
-            });
+            }); //TODO support local and absolute file paths
             defer outputFile.close();
 
             try serializeFreqMap(&freqMap, outputFile);
@@ -320,15 +284,12 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
             defer freqMap.deinit();
             //read the remainder (last byte)
             //build HuffmanTree
-            HuffmanTree.init(allocator, &freqMap);
-            //revert encodingMap? need encoding to byte.
-            //(Maybe huffmantree can be constructed with encodingMap for compresssion, but its inverse if it's for decompression)
-            //go through content, read in chunks (what size?)
-            //per chunk, go to encoding byte chunks (u8 -> [64]u8 ?) 64 is arbitrary but should be a multiple of 8
-            //try to get byte value from the "inverseEncodingMap" (todo find a good name for this map)
-            //  hmm we can't jsut use an inverted map bc we dont know where the boundaries are
-            //  we could try to brute force the map lookup until we find the byte value. or traverse tree
+            var ht = try HuffmanTree.init(allocator, &freqMap);
+            defer ht.deinit();
             //
+            const outputFile = try openFile(config.outputFileName, .{ .mode = .read_write });
+            defer outputFile.close();
+            try decompress(allocator, ht, inputFile, outputFile);
         },
     }
 }
@@ -490,6 +451,12 @@ test "huffman tree test" {
 test "ui example test" {
     const allocator = std.testing.allocator;
 
+    var ht = try uiExample(allocator);
+    defer ht.deinit();
+    ht.root.printSubtree();
+}
+
+fn uiExample(allocator: mem.Allocator) !HuffmanTree {
     var freqMap = FreqMap.init(allocator);
     defer freqMap.deinit();
     try freqMap.put('C', 32);
@@ -501,9 +468,8 @@ test "ui example test" {
     try freqMap.put('U', 37);
     try freqMap.put('Z', 2);
 
-    var ht = try HuffmanTree.init(allocator, &freqMap);
-    defer ht.deinit();
-    ht.root.printSubtree();
+    const ht = try HuffmanTree.init(allocator, &freqMap);
+    return ht;
 }
 
 test "file_test" {
@@ -515,4 +481,221 @@ test "file_test" {
         ally,
         .{ .inputFileName = "tests/book.txt", .operation = Operation.Compression, .outputFileName = "output" },
     );
+}
+test "charToBitChars" {
+    const allocator = std.testing.allocator;
+    var encodingList = std.ArrayList(u8).init(allocator);
+    defer encodingList.deinit();
+
+    const TestCase = struct {
+        subject: u8,
+        expected: []const u8,
+    };
+    const testCases = &[_]TestCase{
+        .{
+            .subject = 0xFF,
+            .expected = &[_]u8{ '1', '1', '1', '1', '1', '1', '1', '1' },
+        },
+        .{
+            .subject = 0x00,
+            .expected = &[_]u8{ '0', '0', '0', '0', '0', '0', '0', '0' },
+        },
+        .{
+            .subject = 0x0F,
+            .expected = &[_]u8{ '0', '0', '0', '0', '1', '1', '1', '1' },
+        },
+        .{
+            .subject = 0xF0,
+            .expected = &[_]u8{ '1', '1', '1', '1', '0', '0', '0', '0' },
+        },
+        .{
+            .subject = 0x44,
+            .expected = &[_]u8{ '0', '1', '0', '0', '0', '1', '0', '0' },
+        },
+        .{
+            .subject = 0xAC,
+            .expected = &[_]u8{ '1', '0', '1', '0', '1', '1', '0', '0' },
+        },
+    };
+    for (testCases) |testCase| {
+        try charToBitChars(testCase.subject, &encodingList);
+        try std.testing.expectEqualSlices(u8, testCase.expected, encodingList.items[0..encodingList.items.len]);
+        encodingList.shrinkRetainingCapacity(0);
+    }
+}
+
+test "bitstrtochar" {
+    const TestCase = struct {
+        subject: []const u8,
+        expected: u8,
+    };
+    const testCases = &[_]TestCase{
+        .{
+            .subject = &[_]u8{ '1', '1', '1', '1', '1', '1', '1', '1' },
+            .expected = 0xFF,
+        },
+        .{
+            .subject = &[_]u8{ '0', '0', '0', '1', '1', '1', '1', '1' },
+            .expected = 0x1F,
+        },
+        .{
+            .subject = &[_]u8{ '0', '0', '0', '0', '0', '0', '0', '1' },
+            .expected = 0x01,
+        },
+        .{
+            .subject = &[_]u8{ '0', '0', '0', '0', '1', '0', '1', '1' },
+            .expected = 0x0B,
+        },
+        .{
+            .subject = &[_]u8{ '0', '0', '0', '0', '0', '0', '0', '0' },
+            .expected = 0x00,
+        },
+    };
+    for (testCases) |testCase| {
+        try std.testing.expectEqual(testCase.expected, bitStrToChar(testCase.subject));
+    }
+}
+fn printMap(map: *std.AutoHashMap(u8, []const u8)) void {
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        print("key: {c} value: {s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+    }
+}
+test "serializeFreqMap / readCompressedFileHeader / deserializeFrequencyMap tests" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{ 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'c', 'b', 'b' };
+    var freqMap = FreqMap.init(allocator);
+    try buildFrequencyMap(&freqMap, &bytes);
+    defer freqMap.deinit();
+    const outputFileName = "serializeFreqMapTest";
+    const outputFile = try fs.cwd().createFile(outputFileName, .{
+        .read = true,
+    });
+    defer outputFile.close();
+    try serializeFreqMap(&freqMap, outputFile);
+    const raw_bytes = try readCompressedFileHeader(allocator, outputFile);
+    defer allocator.free(raw_bytes);
+    const expected_bytes = [_]u8{ 'b', '2', ';', 'a', '1', '0', ';', 'c', '1', ';' };
+    try std.testing.expectEqual(expected_bytes.len, raw_bytes.len);
+    for (0..expected_bytes.len) |idx| {
+        try std.testing.expectEqual(expected_bytes[idx], raw_bytes[idx]);
+    }
+    var deserializedFreqMap = try deserializeFrequencyMap(allocator, raw_bytes);
+    defer deserializedFreqMap.deinit();
+
+    try std.testing.expectEqual(@as(u32, 2), deserializedFreqMap.get('b').?);
+    try std.testing.expectEqual(@as(u32, 10), deserializedFreqMap.get('a').?);
+    try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('c').?);
+}
+test "slicetest" {
+    const testBytes = [_]u8{ 'b', '2', ';', 'a', '1', '0', ';', 'c', '1', ';' };
+    const sliced = testBytes[1..2];
+    print("{d}\n", .{try std.fmt.parseInt(u32, sliced, 10)});
+}
+test "rawBytesToCompressedList" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{ 'a', 'a', 'a', 'c', 'b', 'b', 'd', 'e', 'f', 'a' };
+    //==Handcrafted example==
+    //Running above bytes to generate huffman encodings we get below:
+    // key: b value: 00
+    // key: a value: 11
+    // key: c value: 101
+    // key: e value: 010
+    // key: f value: 011
+    // key: d value: 100
+    //if we encode the bytes by hand using the encoding table above we get:
+    //a  a  a  c   b  b  d   e   f   a
+    //11 11 11 101 00 00 100 010 011 11
+    //the compressed bits representation, grouped 8 at a time:
+    //11111110 10000100 01001111
+    //converting above bits to chars:
+    //0xFE 0x84 0x4F
+    var freqMap = FreqMap.init(allocator);
+    try buildFrequencyMap(&freqMap, &bytes);
+    defer freqMap.deinit();
+    var ht = try HuffmanTree.init(allocator, &freqMap);
+    defer ht.deinit();
+    var compressedList = std.ArrayList(u8).init(allocator);
+    defer compressedList.deinit();
+
+    var encodingsList = std.ArrayList(u8).init(allocator);
+    defer encodingsList.deinit();
+    try rawBytesToCompressedList(&bytes, ht, &encodingsList, &compressedList);
+
+    try std.testing.expectEqual(@as(usize, 3), compressedList.items.len);
+    try std.testing.expectEqual(@as(u8, 0xFE), compressedList.items[0]);
+    try std.testing.expectEqual(@as(u8, 0x84), compressedList.items[1]);
+    try std.testing.expectEqual(@as(u8, 0x4F), compressedList.items[2]);
+}
+test "shiftNthAndForwardsToBeginning" {
+    const allocator = std.testing.allocator;
+    var subject = std.ArrayList(u8).init(allocator);
+    defer subject.deinit();
+
+    try subject.append('1');
+    try subject.append('2');
+    try subject.append('3');
+    try subject.append('4');
+
+    shiftNthAndForwardsToBeginning(&subject, 2);
+
+    try std.testing.expectEqual(@as(i32, 2), subject.items.len);
+    try std.testing.expectEqual(@as(u8, '3'), subject.items[0]);
+    try std.testing.expectEqual(@as(u8, '4'), subject.items[1]);
+
+    try subject.append('1');
+    try subject.append('2');
+    try std.testing.expectEqual(@as(i32, 4), subject.items.len);
+
+    shiftNthAndForwardsToBeginning(&subject, 2);
+    try std.testing.expectEqual(@as(i32, 2), subject.items.len);
+    try std.testing.expectEqual(@as(u8, '1'), subject.items[0]);
+    try std.testing.expectEqual(@as(u8, '2'), subject.items[1]);
+}
+test "attemptFindLeafNodeCharFromEncodingBits" {
+    const allocator = std.testing.allocator;
+    var ht = try uiExample(allocator);
+    defer ht.deinit();
+    var encodingsList = std.ArrayList(u8).init(allocator);
+    defer encodingsList.deinit();
+    const encodingStr = &[_]u8{ '0', '1', '0', '0', '1', '0', '1', '0', '1', '1', '1', '0' };
+    //expecting: E, U, L, E, C
+    //in ui, D and L have the same value 42, in my program L is prioritized over D
+    for (encodingStr) |ch| {
+        try encodingsList.append(ch);
+    }
+
+    var decompressedList = std.ArrayList(u8).init(allocator);
+    defer decompressedList.deinit();
+
+    try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    try std.testing.expectEqual(@as(usize, 1), decompressedList.items.len);
+    try std.testing.expectEqual(@as(usize, 11), encodingsList.items.len);
+    try std.testing.expectEqual('E', decompressedList.items[0]);
+
+    try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    try std.testing.expectEqual(@as(usize, 2), decompressedList.items.len);
+    try std.testing.expectEqual(@as(usize, 8), encodingsList.items.len);
+    try std.testing.expectEqual('U', decompressedList.items[1]);
+
+    try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    try std.testing.expectEqual(@as(usize, 3), decompressedList.items.len);
+    try std.testing.expectEqual(@as(usize, 5), encodingsList.items.len);
+    try std.testing.expectEqual('L', decompressedList.items[2]);
+
+    try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    try std.testing.expectEqual(@as(usize, 4), decompressedList.items.len);
+    try std.testing.expectEqual(@as(usize, 4), encodingsList.items.len);
+    try std.testing.expectEqual('E', decompressedList.items[3]);
+
+    try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
+    try std.testing.expectEqual(@as(usize, 5), decompressedList.items.len);
+    try std.testing.expectEqual(@as(usize, 0), encodingsList.items.len);
+    try std.testing.expectEqual('C', decompressedList.items[4]);
+}
+
+test "absolutepathtest" {
+    var out_buffer: [64]u8 = undefined;
+    const path = try fs.cwd().realpath(".", &out_buffer);
+    print("path: {s}\n", .{path});
 }
