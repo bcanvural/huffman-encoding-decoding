@@ -75,7 +75,7 @@ fn compress(
     defer encodingsList.deinit(); //we collect all encoding bits in order here
     //how many bits we processed in the last compressedChar, written as char in the last byte.
     //will be useful during decompression
-    var remainder: usize = 0; //todo rename this, it's not remainder it's how many processed
+    var lastProcessedBitCount: usize = 0; //how many bits in the last byte contains compressed bits
     while (true) {
         var fileCharBuf: [1024]u8 = undefined;
         const readCount = try inputFile.read(&fileCharBuf);
@@ -87,7 +87,7 @@ fn compress(
     }
     //if we still have leftovers (we can, up to 8 items)
     if (encodingsList.items.len > 0) {
-        remainder = encodingsList.items.len; //remember this field! we'll write it to the outputfile so we can read it during decompression
+        lastProcessedBitCount = encodingsList.items.len; //remember this field! we'll write it to the outputfile so we can read it during decompression
         const compressed = bitStrToChar(encodingsList.items[0..encodingsList.items.len]);
         try compressedList.append(compressed);
     }
@@ -95,7 +95,7 @@ fn compress(
     //TODO don't keep all in memory, do partial writes
     try outputFile.seekFromEnd(0);
     try outputFile.writeAll(compressedList.items);
-    const remainderInU8 = mod8RemainderToU8(remainder);
+    const remainderInU8 = mod8RemainderToU8(lastProcessedBitCount);
     _ = try outputFile.write(&[_]u8{remainderInU8});
 }
 
@@ -143,7 +143,7 @@ test "compress" {
     // key: c value: 01
     // therefore we expect these bits:
     //11111111 11010000
-    //last 2 0s are padding (remainder should be 6, ps remainder is a terrible name, it's actually opposite it should be lastProcessedBitCount)
+    //last 2 0s are padding (lastProcessedBitCount should be 6, ps remainder is a terrible name, it's actually opposite it should be lastProcessedBitCount)
     //so expected bytes are:
     //0xFF 0xD0
     //and one last byte that should be '6' !
