@@ -243,7 +243,7 @@ fn decompress(
     defer encodingsList.deinit();
     var decompressedCharList = std.ArrayList(u8).init(allocator);
     defer decompressedCharList.deinit();
-    //go through content, read in chunks (what size?)
+    //go through content, read in chunks
     while (true) {
         //4096 will always be enough, because a byte has 8 bits so 256 possible combinations
         //encoding is related to the tree depth, we should be good with 4096
@@ -257,6 +257,7 @@ fn decompress(
         //attempt to find the decompressed chars (we may not every time, but that's ok)
         while (try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedCharList)) {
             print("Decompressed char count: {d}\n", .{decompressedCharList.items.len});
+            printCharList(&decompressedCharList);
         }
 
         //do something
@@ -264,10 +265,15 @@ fn decompress(
             break;
         }
     }
-    //per chunk, try to find encoding by traversing the map
+    //per chunk, try to find encoding by traversing the tree
     //  we process the chunk left to right, at any point we might find a leaf node. remember at which index this occurred
     //  copy the remainder to the beginning of the array, read more chunks until array is full again, reapeat.
 
+}
+fn printCharList(list: *std.ArrayList(u8)) void {
+    for (list.items) |item| {
+        print("{c}\n", .{item});
+    }
 }
 
 //processes encodingsList, if a leaf node is found shrinks it (retaining capacity)
@@ -350,8 +356,10 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
             var ht = try HuffmanTree.init(allocator, &freqMap);
             defer ht.deinit();
             //
-            //todo outputfile may not exist, create one if not
-            const outputFile = try openFile(config.outputFileName, .{ .mode = .read_write });
+            const outputFile = openFile(config.outputFileName, .{ .mode = .read_write }) catch |err| switch (err) {
+                fs.File.OpenError.FileNotFound => try fs.cwd().createFile(config.outputFileName, .{}),
+                else => return err,
+            };
             defer outputFile.close();
             try decompress(allocator, ht, inputFile, outputFile);
         },
