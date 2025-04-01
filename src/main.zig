@@ -68,18 +68,20 @@ fn compress(
     inputFile: fs.File,
     outputFile: fs.File,
 ) !void {
+    try outputFile.seekFromEnd(0);
     var compressedList = std.ArrayList(u8).init(allocator); //we collect compressed chars here
     defer compressedList.deinit();
     var encodingsList = std.ArrayList(u8).init(allocator);
     defer encodingsList.deinit(); //we collect all encoding bits in order here
     //how many bits we processed in the last compressedChar, written as char in the last byte.
     //will be useful during decompression
-    var remainder: usize = 0;
+    var remainder: usize = 0; //todo rename this, it's not remainder it's how many processed
     while (true) {
         var fileCharBuf: [1024]u8 = undefined;
         const readCount = try inputFile.read(&fileCharBuf);
         try rawBytesToCompressedList(fileCharBuf[0..readCount], ht, &encodingsList, &compressedList);
         if (readCount < 1024) {
+            //todo, this condition may not be sufficient to determine eof was reached
             break;
         }
     }
@@ -97,6 +99,60 @@ fn compress(
     _ = try outputFile.write(&[_]u8{remainderInU8});
 }
 
+test "compress" {
+    const allocator = std.testing.allocator;
+
+    var freqMap = FreqMap.init(allocator);
+    defer freqMap.deinit();
+    try freqMap.put('a', 10);
+    try freqMap.put('c', 1);
+    try freqMap.put('b', 2);
+
+    var ht = try HuffmanTree.init(allocator, &freqMap);
+    defer ht.deinit();
+
+    printMap(&ht.encodingMap);
+
+    const inputFile = try openFile("tests/compresstest.txt", .{});
+    defer inputFile.close();
+
+    const outputFile = try fs.cwd().createFile("compresstestoutput", .{ .read = true });
+    defer outputFile.close();
+
+    try serializeFreqMap(&freqMap, outputFile);
+
+    try compress(allocator, ht, inputFile, outputFile);
+
+    //checks
+    const header = try readCompressedFileHeader(allocator, outputFile);
+    defer allocator.free(header);
+    print("{s}\n", .{header});
+
+    var deserializedFreqMap = try deserializeFrequencyMap(allocator, header);
+    defer deserializedFreqMap.deinit();
+    try std.testing.expectEqual(@as(u32, 10), deserializedFreqMap.get('a').?);
+    try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('c').?);
+    try std.testing.expectEqual(@as(u32, 2), deserializedFreqMap.get('b').?);
+
+    //readCompressedFileHeader above moved the outputFile's cursor to the HEADER_DELIMITER
+    const remainingBytes = try outputFile.readToEndAlloc(allocator, MAX_FILE_SIZE);
+    defer allocator.free(remainingBytes);
+    //encoding map is:
+    // key: b value: 01
+    // key: a value: 1
+    // key: c value: 00
+    // therefore we expect these bits:
+    //11111111 11000100
+    //last 2 0s are padding (remainder should be 6, ps remainder is a terrible name)
+    //so expected bytes are:
+    //0xFF 0xC4
+    //and one last byte that should be '6' !
+    try std.testing.expectEqual(@as(usize, 3), remainingBytes.len);
+    try std.testing.expectEqual(@as(u8, 0xFF), remainingBytes[0]);
+    try std.testing.expectEqual(@as(u8, 0xC4), remainingBytes[1]);
+    try std.testing.expectEqual(@as(u8, '6'), remainingBytes[2]);
+}
+
 //Go through each byte, find its encoding from the encodingmap
 //flatten each ending bit string to the encodingsList list
 //if encodingsList surpassed >8 items consume and compress, collect compressed chars in compressedList
@@ -104,7 +160,16 @@ fn rawBytesToCompressedList(rawBytes: []u8, ht: HuffmanTree, encodingsList: *std
     var bufIdx: usize = 0;
     while (bufIdx < rawBytes.len) : (bufIdx += 1) {
         const byte = rawBytes[bufIdx];
-        const encoding = ht.encodingMap.get(byte) orelse return HuffmanError.ByteUnaccountedFor;
+        const encoding = ht.encodingMap.get(byte) orelse {
+            const representation = switch (byte) {
+                '\n' => "newLine",
+                '\t' => "tab",
+                '\r' => "carriage return",
+                else => &[_]u8{byte},
+            };
+            print("unaccounted byte: {s}\n", .{representation});
+            return HuffmanError.ByteUnaccountedFor;
+        };
         //flatten the encoding bits into encodingslist
         for (encoding) |bitStr| {
             try encodingsList.append(bitStr);
@@ -285,6 +350,7 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
             var ht = try HuffmanTree.init(allocator, &freqMap);
             defer ht.deinit();
             //
+            //todo outputfile may not exist, create one if not
             const outputFile = try openFile(config.outputFileName, .{ .mode = .read_write });
             defer outputFile.close();
             try decompress(allocator, ht, inputFile, outputFile);
@@ -449,14 +515,21 @@ test "huffman tree test" {
 test "ui example test" {
     const allocator = std.testing.allocator;
 
-    var ht = try uiExample(allocator);
+    var ht = try uiExampleHuffmanTree(allocator);
     defer ht.deinit();
     ht.root.printSubtree();
 }
 
-fn uiExample(allocator: mem.Allocator) !HuffmanTree {
-    var freqMap = FreqMap.init(allocator);
+//test helper
+fn uiExampleHuffmanTree(allocator: mem.Allocator) !HuffmanTree {
+    var freqMap = try uiExampleFreqMap(allocator);
     defer freqMap.deinit();
+    const ht = try HuffmanTree.init(allocator, &freqMap);
+    return ht;
+}
+//test helper
+fn uiExampleFreqMap(allocator: mem.Allocator) !FreqMap {
+    var freqMap = FreqMap.init(allocator);
     try freqMap.put('C', 32);
     try freqMap.put('D', 42);
     try freqMap.put('E', 120);
@@ -465,9 +538,7 @@ fn uiExample(allocator: mem.Allocator) !HuffmanTree {
     try freqMap.put('M', 24);
     try freqMap.put('U', 37);
     try freqMap.put('Z', 2);
-
-    const ht = try HuffmanTree.init(allocator, &freqMap);
-    return ht;
+    return freqMap;
 }
 
 test "file_test" {
@@ -652,7 +723,7 @@ test "shiftNthAndForwardsToBeginning" {
 }
 test "attemptFindLeafNodeCharFromEncodingBits" {
     const allocator = std.testing.allocator;
-    var ht = try uiExample(allocator);
+    var ht = try uiExampleHuffmanTree(allocator);
     defer ht.deinit();
     var encodingsList = std.ArrayList(u8).init(allocator);
     defer encodingsList.deinit();
