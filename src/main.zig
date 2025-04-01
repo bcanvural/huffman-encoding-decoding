@@ -106,7 +106,7 @@ test "compress" {
     defer freqMap.deinit();
     try freqMap.put('a', 10);
     try freqMap.put('c', 1);
-    try freqMap.put('b', 2);
+    try freqMap.put('b', 1);
 
     var ht = try HuffmanTree.init(allocator, &freqMap);
     defer ht.deinit();
@@ -132,24 +132,24 @@ test "compress" {
     defer deserializedFreqMap.deinit();
     try std.testing.expectEqual(@as(u32, 10), deserializedFreqMap.get('a').?);
     try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('c').?);
-    try std.testing.expectEqual(@as(u32, 2), deserializedFreqMap.get('b').?);
+    try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('b').?);
 
     //readCompressedFileHeader above moved the outputFile's cursor to the HEADER_DELIMITER
     const remainingBytes = try outputFile.readToEndAlloc(allocator, MAX_FILE_SIZE);
     defer allocator.free(remainingBytes);
     //encoding map is:
-    // key: b value: 01
+    // key: b value: 00
     // key: a value: 1
-    // key: c value: 00
+    // key: c value: 01
     // therefore we expect these bits:
-    //11111111 11000100
-    //last 2 0s are padding (remainder should be 6, ps remainder is a terrible name)
+    //11111111 11010000
+    //last 2 0s are padding (remainder should be 6, ps remainder is a terrible name, it's actually opposite it should be lastProcessedBitCount)
     //so expected bytes are:
-    //0xFF 0xC4
+    //0xFF 0xD0
     //and one last byte that should be '6' !
     try std.testing.expectEqual(@as(usize, 3), remainingBytes.len);
     try std.testing.expectEqual(@as(u8, 0xFF), remainingBytes[0]);
-    try std.testing.expectEqual(@as(u8, 0xC4), remainingBytes[1]);
+    try std.testing.expectEqual(@as(u8, 0xD0), remainingBytes[1]);
     try std.testing.expectEqual(@as(u8, '6'), remainingBytes[2]);
 }
 
@@ -237,7 +237,7 @@ fn decompress(
     // _ = allocator;
     // _ = ht;
     // _ = inputFile;
-    _ = outputFile;
+    // _ = outputFile;
 
     var encodingsList = std.ArrayList(u8).init(allocator);
     defer encodingsList.deinit();
@@ -269,6 +269,7 @@ fn decompress(
     //  we process the chunk left to right, at any point we might find a leaf node. remember at which index this occurred
     //  copy the remainder to the beginning of the array, read more chunks until array is full again, reapeat.
 
+    try outputFile.writeAll(decompressedCharList.items);
 }
 fn printCharList(list: *std.ArrayList(u8)) void {
     for (list.items) |item| {
@@ -748,31 +749,31 @@ test "attemptFindLeafNodeCharFromEncodingBits" {
     var foundE = try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
     try std.testing.expect(foundE);
     try std.testing.expectEqual(@as(usize, 1), decompressedList.items.len);
-    try std.testing.expectEqual(@as(usize, 11), encodingsList.items.len);
+    try std.testing.expectEqual(@as(usize, encodingStr.len - 1), encodingsList.items.len);
     try std.testing.expectEqual('E', decompressedList.items[0]);
 
     const foundU = try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
     try std.testing.expect(foundU);
     try std.testing.expectEqual(@as(usize, 2), decompressedList.items.len);
-    try std.testing.expectEqual(@as(usize, 8), encodingsList.items.len);
+    try std.testing.expectEqual(@as(usize, encodingStr.len - 4), encodingsList.items.len);
     try std.testing.expectEqual('U', decompressedList.items[1]);
 
     const foundL = try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
     try std.testing.expect(foundL);
     try std.testing.expectEqual(@as(usize, 3), decompressedList.items.len);
-    try std.testing.expectEqual(@as(usize, 5), encodingsList.items.len);
+    try std.testing.expectEqual(@as(usize, encodingStr.len - 7), encodingsList.items.len);
     try std.testing.expectEqual('L', decompressedList.items[2]);
 
     foundE = try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
     try std.testing.expect(foundE);
     try std.testing.expectEqual(@as(usize, 4), decompressedList.items.len);
-    try std.testing.expectEqual(@as(usize, 4), encodingsList.items.len);
+    try std.testing.expectEqual(@as(usize, encodingStr.len - 8), encodingsList.items.len);
     try std.testing.expectEqual('E', decompressedList.items[3]);
 
     const foundC = try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedList);
     try std.testing.expect(foundC);
     try std.testing.expectEqual(@as(usize, 5), decompressedList.items.len);
-    try std.testing.expectEqual(@as(usize, 0), encodingsList.items.len);
+    try std.testing.expectEqual(@as(usize, encodingStr.len - 12), encodingsList.items.len);
     try std.testing.expectEqual('C', decompressedList.items[4]);
 }
 
