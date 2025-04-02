@@ -99,70 +99,6 @@ fn compress(
     try outputFile.writeAll(compressedList.items);
 }
 
-test "compress" {
-    const allocator = std.testing.allocator;
-
-    var freqMap = FreqMap.init(allocator);
-    defer freqMap.deinit();
-    try freqMap.put('a', 10);
-    try freqMap.put('c', 1);
-    try freqMap.put('b', 1);
-
-    var ht = try HuffmanTree.init(allocator, &freqMap);
-    defer ht.deinit();
-
-    printMap(&ht.encodingMap);
-
-    const inputFile = try openFile("tests/compresstest.txt", .{});
-    defer inputFile.close();
-
-    const outputFile = try fs.cwd().createFile("compresstestoutput", .{ .read = true });
-    //will use the outputfile later so won't defer close it for now
-
-    try serializeFreqMap(&freqMap, outputFile);
-
-    try compress(allocator, ht, inputFile, outputFile);
-
-    const header = try readCompressedFileHeader(allocator, outputFile);
-    defer allocator.free(header);
-    print("{s}\n", .{header});
-
-    var deserializedFreqMap = try deserializeFrequencyMap(allocator, header);
-    defer deserializedFreqMap.deinit();
-    try std.testing.expectEqual(@as(u32, 10), deserializedFreqMap.get('a').?);
-    try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('c').?);
-    try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('b').?);
-
-    try moveFileCursorToEndOfHeader(outputFile);
-    const remainingBytes = try outputFile.readToEndAlloc(allocator, MAX_FILE_SIZE);
-    defer allocator.free(remainingBytes);
-    //encoding map is:
-    // key: b value: 00
-    // key: a value: 1
-    // key: c value: 01
-    // therefore we expect these bits:
-    //11111111 11010000
-    //last 2 0s are padding (lastProcessedBitCount should be 6)
-    //so expected bytes are:
-    //0x36 0xFF 0xD0
-    //0x36 is equivalent to '6' as char byte
-    try std.testing.expectEqual(@as(usize, 3), remainingBytes.len);
-    try std.testing.expectEqual(@as(u8, '6'), remainingBytes[0]);
-    try std.testing.expectEqual(@as(u8, 0xFF), remainingBytes[1]);
-    try std.testing.expectEqual(@as(u8, 0xD0), remainingBytes[2]);
-
-    //decompress
-    outputFile.close();
-
-    const decompressInput = try openFile("compresstestoutput", .{});
-    defer decompressInput.close();
-
-    const decompressOutput = try fs.cwd().createFile("decompressoutput", .{});
-    defer decompressOutput.close();
-
-    try decompress(allocator, ht, decompressInput, decompressOutput);
-}
-
 //Go through each byte, find its encoding from the encodingmap
 //flatten each ending bit string to the encodingsList list
 //if encodingsList surpassed >8 items consume and compress, collect compressed chars in compressedList
@@ -278,32 +214,146 @@ fn decompress(
     defer encodingsList.deinit();
     var decompressedCharList = std.ArrayList(u8).init(allocator);
     defer decompressedCharList.deinit();
+    var lastDecompressedChars = std.ArrayList(u8).init(allocator);
+    defer lastDecompressedChars.deinit(); //will hold last decompressedchars that we actually want
     try moveFileCursorToEndOfHeader(inputFile);
-    const lastProcessedBitCount = try inputFile.reader().readByte();
-    print("lastProcessedBitCount: {c}\n", .{lastProcessedBitCount});
-    while (true) {
+    const lastProcessedBitCount = bitChToUsize(try inputFile.reader().readByte());
+    print("lastProcessedBitCount: {d}\n", .{lastProcessedBitCount});
+    const contentSize = (try inputFile.metadata()).size() - (try inputFile.getPos());
+    var totalRead: u64 = 0;
+    var lastRound = false;
+
+    print("contentSize: {d}\n", .{contentSize});
+    while (!lastRound) {
         var fileCharBuf: [4096]u8 = undefined;
         const readCount = try inputFile.read(&fileCharBuf);
-        //todo handle last byte of file OR write the lastProcessedBitCount to the header
-        for (fileCharBuf[0..readCount]) |fileChar| {
+        totalRead += @as(u64, readCount);
+        if (totalRead >= contentSize) {
+            lastRound = true;
+        }
+        var fileCharsToBeProcessed = readCount;
+        if (lastRound) {
+            fileCharsToBeProcessed -= 1; //skipping last byte in case this is last round
+        }
+        for (fileCharBuf[0..fileCharsToBeProcessed]) |fileChar| {
+            print("inside for\n", .{});
             try charToBitChars(fileChar, &encodingsList);
         }
         //attempt to find the decompressed chars (we may not every time, but that's ok)
         while (try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedCharList)) {
-            print("Decompressed char count: {d}\n", .{decompressedCharList.items.len});
-            printCharList(&decompressedCharList);
+            // print("Decompressed char count: {d}\n", .{decompressedCharList.items.len});
+            // printCharList(&decompressedCharList);
         }
-
-        if (readCount < 1024) {
-            break;
+        if (lastRound) {
+            print("Last round!\n", .{});
+            //handle special case with "lastProcessedBitCount"
+            //setup
+            var lastBitCharslist = std.ArrayList(u8).init(allocator);
+            defer lastBitCharslist.deinit(); //will hold all bits of last unprocessed byte (includes the ones we don't actually want)
+            var lastEncodingList = std.ArrayList(u8).init(allocator);
+            defer lastEncodingList.deinit(); //will hold last encodings that we actually want
+            //start
+            const lastFileByte = fileCharBuf[fileCharsToBeProcessed];
+            try charToBitChars(lastFileByte, &lastBitCharslist);
+            const lastEncodingsToConsider = lastBitCharslist.items[0..lastProcessedBitCount];
+            for (lastEncodingsToConsider) |encoding| {
+                try lastEncodingList.append(encoding);
+            }
+            while (try attemptFindLeafNodeCharFromEncodingBits(ht, &lastEncodingList, &lastDecompressedChars)) {
+                printCharList(&lastDecompressedChars);
+            }
+            print("lastround done\n", .{});
         }
     }
 
     try outputFile.writeAll(decompressedCharList.items); //todo do partial writes
+    print("Decompressed char count: {d}\n", .{decompressedCharList.items.len});
+    printCharList(&decompressedCharList);
+    try outputFile.writeAll(lastDecompressedChars.items); //final writeup
+    print("Last decompressed char count: {d}\n", .{lastDecompressedChars.items.len});
+    printCharList(&lastDecompressedChars);
+}
+
+test "compress" {
+    const allocator = std.testing.allocator;
+
+    var freqMap = FreqMap.init(allocator);
+    defer freqMap.deinit();
+    try freqMap.put('a', 10);
+    try freqMap.put('c', 1);
+    try freqMap.put('b', 1);
+
+    var ht = try HuffmanTree.init(allocator, &freqMap);
+    defer ht.deinit();
+
+    printMap(&ht.encodingMap);
+
+    const inputFile = try openFile("tests/compresstest.txt", .{});
+    defer inputFile.close();
+
+    const outputFile = try fs.cwd().createFile("compresstestoutput", .{ .read = true });
+    //will use the outputfile later so won't defer close it for now
+
+    try serializeFreqMap(&freqMap, outputFile);
+
+    try compress(allocator, ht, inputFile, outputFile);
+
+    const header = try readCompressedFileHeader(allocator, outputFile);
+    defer allocator.free(header);
+    print("{s}\n", .{header});
+
+    var deserializedFreqMap = try deserializeFrequencyMap(allocator, header);
+    defer deserializedFreqMap.deinit();
+    try std.testing.expectEqual(@as(u32, 10), deserializedFreqMap.get('a').?);
+    try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('c').?);
+    try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('b').?);
+
+    try moveFileCursorToEndOfHeader(outputFile);
+    const remainingBytes = try outputFile.readToEndAlloc(allocator, MAX_FILE_SIZE);
+    defer allocator.free(remainingBytes);
+    //encoding map is:
+    // key: b value: 00
+    // key: a value: 1
+    // key: c value: 01
+    // therefore we expect these bits:
+    //11111111 11010000
+    //last 2 0s are padding (lastProcessedBitCount should be 6)
+    //so expected bytes are:
+    //0x36 0xFF 0xD0
+    //0x36 is equivalent to '6' as char byte
+    try std.testing.expectEqual(@as(usize, 3), remainingBytes.len);
+    try std.testing.expectEqual(@as(u8, '6'), remainingBytes[0]);
+    try std.testing.expectEqual(@as(u8, 0xFF), remainingBytes[1]);
+    try std.testing.expectEqual(@as(u8, 0xD0), remainingBytes[2]);
+
+    //decompress
+    outputFile.close();
+
+    const decompressInput = try openFile("compresstestoutput", .{});
+    defer decompressInput.close();
+
+    const decompressOutput = try fs.cwd().createFile("decompressoutput", .{});
+    defer decompressOutput.close();
+
+    try decompress(allocator, ht, decompressInput, decompressOutput);
 }
 fn printCharList(list: *std.ArrayList(u8)) void {
     for (list.items) |item| {
         print("{c}\n", .{item});
+    }
+}
+
+inline fn bitChToUsize(bit: u8) usize {
+    switch (bit) {
+        '0' => return @as(usize, 0),
+        '1' => return @as(usize, 1),
+        '2' => return @as(usize, 2),
+        '3' => return @as(usize, 3),
+        '4' => return @as(usize, 4),
+        '5' => return @as(usize, 5),
+        '6' => return @as(usize, 6),
+        '7' => return @as(usize, 7),
+        else => unreachable,
     }
 }
 
@@ -811,4 +861,17 @@ test "absolutepathtest" {
     var out_buffer: [64]u8 = undefined;
     const path = try fs.cwd().realpath(".", &out_buffer);
     print("path: {s}\n", .{path});
+}
+
+test "filesizetest" {
+    const testFileName = "filesizetest";
+    const testFile = try fs.cwd().createFile(testFileName, .{ .read = true });
+    defer {
+        testFile.close();
+        fs.cwd().deleteFile(testFileName) catch |err| {
+            print("Caught error: {}\n", .{err});
+        };
+    }
+    try testFile.writeAll(&[_]u8{ '1', '2', '3' });
+    try std.testing.expectEqual(@as(u64, 3), (try testFile.metadata()).size());
 }
