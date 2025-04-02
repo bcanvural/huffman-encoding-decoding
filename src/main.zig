@@ -214,8 +214,6 @@ fn decompress(
     defer encodingsList.deinit();
     var decompressedCharList = std.ArrayList(u8).init(allocator);
     defer decompressedCharList.deinit();
-    var lastDecompressedChars = std.ArrayList(u8).init(allocator);
-    defer lastDecompressedChars.deinit(); //will hold last decompressedchars that we actually want
     try moveFileCursorToEndOfHeader(inputFile);
     const lastProcessedBitCount = bitChToUsize(try inputFile.reader().readByte());
     print("lastProcessedBitCount: {d}\n", .{lastProcessedBitCount});
@@ -240,28 +238,22 @@ fn decompress(
             try charToBitChars(fileChar, &encodingsList);
         }
         //attempt to find the decompressed chars (we may not every time, but that's ok)
-        while (try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedCharList)) {
-            // print("Decompressed char count: {d}\n", .{decompressedCharList.items.len});
-            // printCharList(&decompressedCharList);
-        }
+        while (try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedCharList)) {}
         if (lastRound) {
+            //TODO big finding: we got to use encodingslist from above too! it got some leftovers
             print("Last round!\n", .{});
             //handle special case with "lastProcessedBitCount"
             //setup
             var lastBitCharslist = std.ArrayList(u8).init(allocator);
             defer lastBitCharslist.deinit(); //will hold all bits of last unprocessed byte (includes the ones we don't actually want)
-            var lastEncodingList = std.ArrayList(u8).init(allocator);
-            defer lastEncodingList.deinit(); //will hold last encodings that we actually want
             //start
             const lastFileByte = fileCharBuf[fileCharsToBeProcessed];
             try charToBitChars(lastFileByte, &lastBitCharslist);
             const lastEncodingsToConsider = lastBitCharslist.items[0..lastProcessedBitCount];
             for (lastEncodingsToConsider) |encoding| {
-                try lastEncodingList.append(encoding);
+                try encodingsList.append(encoding);
             }
-            while (try attemptFindLeafNodeCharFromEncodingBits(ht, &lastEncodingList, &lastDecompressedChars)) {
-                printCharList(&lastDecompressedChars);
-            }
+            while (try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedCharList)) {}
             print("lastround done\n", .{});
         }
     }
@@ -269,9 +261,6 @@ fn decompress(
     try outputFile.writeAll(decompressedCharList.items); //todo do partial writes
     print("Decompressed char count: {d}\n", .{decompressedCharList.items.len});
     printCharList(&decompressedCharList);
-    try outputFile.writeAll(lastDecompressedChars.items); //final writeup
-    print("Last decompressed char count: {d}\n", .{lastDecompressedChars.items.len});
-    printCharList(&lastDecompressedChars);
 }
 
 test "compress" {
