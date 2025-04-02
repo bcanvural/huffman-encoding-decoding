@@ -10,8 +10,7 @@ const HuffmanTree = @import("types.zig").HuffmanTree;
 const Node = @import("types.zig").Node;
 
 const MAX_FILE_SIZE: usize = 100000000;
-//TODO: this will potentially collide with the content
-const HEADER_DELIMITER: u8 = '#';
+const HEADER_DELIMITER: u8 = '#'; //we will write this twice after FreqMap to know freqmap ended.
 
 //Format: [1byte key][up to 10 byte value][;][1byte key][up to 10 byte value][;]...
 // 10 byte because 2^32 has 10 digits
@@ -24,7 +23,7 @@ fn serializeFreqMap(freqMap: *FreqMap, outputFile: fs.File) !void {
         _ = try outputFile.write(valueStr);
         _ = try outputFile.write(";");
     }
-    _ = try outputFile.write(&[_]u8{HEADER_DELIMITER});
+    _ = try outputFile.write(&[_]u8{ HEADER_DELIMITER, HEADER_DELIMITER }); //writing twice
 }
 
 //returned bytes are owned by the caller, need to be freed with the same allocator
@@ -91,12 +90,13 @@ fn compress(
         const compressed = bitStrToChar(encodingsList.items[0..encodingsList.items.len]);
         try compressedList.append(compressed);
     }
+    try moveFileCursorToEndOfHeader(outputFile);
+    const remainderInU8 = mod8RemainderToU8(lastProcessedBitCount);
+    _ = try outputFile.write(&[_]u8{remainderInU8}); //writing to just after HEADER_DELIMITERs
     //write all the compressed chars
     //TODO don't keep all in memory, do partial writes
     try outputFile.seekFromEnd(0);
     try outputFile.writeAll(compressedList.items);
-    const remainderInU8 = mod8RemainderToU8(lastProcessedBitCount);
-    _ = try outputFile.write(&[_]u8{remainderInU8});
 }
 
 test "compress" {
@@ -117,13 +117,12 @@ test "compress" {
     defer inputFile.close();
 
     const outputFile = try fs.cwd().createFile("compresstestoutput", .{ .read = true });
-    defer outputFile.close();
+    //will use the outputfile later so won't defer close it for now
 
     try serializeFreqMap(&freqMap, outputFile);
 
     try compress(allocator, ht, inputFile, outputFile);
 
-    //checks
     const header = try readCompressedFileHeader(allocator, outputFile);
     defer allocator.free(header);
     print("{s}\n", .{header});
@@ -134,7 +133,7 @@ test "compress" {
     try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('c').?);
     try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('b').?);
 
-    //readCompressedFileHeader above moved the outputFile's cursor to the HEADER_DELIMITER
+    try moveFileCursorToEndOfHeader(outputFile);
     const remainingBytes = try outputFile.readToEndAlloc(allocator, MAX_FILE_SIZE);
     defer allocator.free(remainingBytes);
     //encoding map is:
@@ -143,14 +142,25 @@ test "compress" {
     // key: c value: 01
     // therefore we expect these bits:
     //11111111 11010000
-    //last 2 0s are padding (lastProcessedBitCount should be 6, ps remainder is a terrible name, it's actually opposite it should be lastProcessedBitCount)
+    //last 2 0s are padding (lastProcessedBitCount should be 6)
     //so expected bytes are:
-    //0xFF 0xD0
-    //and one last byte that should be '6' !
+    //0x36 0xFF 0xD0
+    //0x36 is equivalent to '6' as char byte
     try std.testing.expectEqual(@as(usize, 3), remainingBytes.len);
-    try std.testing.expectEqual(@as(u8, 0xFF), remainingBytes[0]);
-    try std.testing.expectEqual(@as(u8, 0xD0), remainingBytes[1]);
-    try std.testing.expectEqual(@as(u8, '6'), remainingBytes[2]);
+    try std.testing.expectEqual(@as(u8, '6'), remainingBytes[0]);
+    try std.testing.expectEqual(@as(u8, 0xFF), remainingBytes[1]);
+    try std.testing.expectEqual(@as(u8, 0xD0), remainingBytes[2]);
+
+    //decompress
+    outputFile.close();
+
+    const decompressInput = try openFile("compresstestoutput", .{});
+    defer decompressInput.close();
+
+    const decompressOutput = try fs.cwd().createFile("decompressoutput", .{});
+    defer decompressOutput.close();
+
+    try decompress(allocator, ht, decompressInput, decompressOutput);
 }
 
 //Go through each byte, find its encoding from the encodingmap
@@ -228,29 +238,53 @@ fn charToBitChars(ch: u8, outEncodingList: *std.ArrayList(u8)) !void {
     return;
 }
 
+fn moveFileCursorToEndOfHeader(file: fs.File) !void {
+    try file.seekTo(0);
+    var buf: [1024]u8 = undefined;
+    //header ends with 2 HEADER_DELIMITER chars.
+    //TODO make below more resillient to delimiter not existing
+    while (true) {
+        _ = try file.reader().readUntilDelimiter(&buf, HEADER_DELIMITER);
+        //read 1 more, that one should also be HEADER_DELIMITER
+        const anotherLimiter = try file.reader().readByte();
+        if (anotherLimiter == HEADER_DELIMITER) {
+            break;
+        }
+    }
+}
+
+test "moveFileCursorToEndOfHeader" {
+    const testFileName = "moveFileCursorToEndOfHeader";
+    const testFile = try fs.cwd().createFile(testFileName, .{ .read = true });
+    defer {
+        testFile.close();
+        fs.cwd().deleteFile(testFileName) catch |err| {
+            print("Caught error: {}\n", .{err});
+        };
+    }
+    try testFile.writeAll(&[_]u8{ '1', '2', '3', '#', '#', '6' });
+    try moveFileCursorToEndOfHeader(testFile);
+    const aByte = try testFile.reader().readByte();
+    try std.testing.expectEqual(@as(u8, '6'), aByte);
+}
+
 fn decompress(
     allocator: mem.Allocator,
     ht: HuffmanTree,
     inputFile: fs.File,
     outputFile: fs.File,
 ) !void {
-    // _ = allocator;
-    // _ = ht;
-    // _ = inputFile;
-    // _ = outputFile;
-
     var encodingsList = std.ArrayList(u8).init(allocator);
     defer encodingsList.deinit();
     var decompressedCharList = std.ArrayList(u8).init(allocator);
     defer decompressedCharList.deinit();
-    //go through content, read in chunks
+    try moveFileCursorToEndOfHeader(inputFile);
+    const lastProcessedBitCount = try inputFile.reader().readByte();
+    print("lastProcessedBitCount: {c}\n", .{lastProcessedBitCount});
     while (true) {
-        //4096 will always be enough, because a byte has 8 bits so 256 possible combinations
-        //encoding is related to the tree depth, we should be good with 4096
-        //(we will quit program if not)
         var fileCharBuf: [4096]u8 = undefined;
         const readCount = try inputFile.read(&fileCharBuf);
-
+        //todo handle last byte of file OR write the lastProcessedBitCount to the header
         for (fileCharBuf[0..readCount]) |fileChar| {
             try charToBitChars(fileChar, &encodingsList);
         }
@@ -260,16 +294,12 @@ fn decompress(
             printCharList(&decompressedCharList);
         }
 
-        //do something
         if (readCount < 1024) {
             break;
         }
     }
-    //per chunk, try to find encoding by traversing the tree
-    //  we process the chunk left to right, at any point we might find a leaf node. remember at which index this occurred
-    //  copy the remainder to the beginning of the array, read more chunks until array is full again, reapeat.
 
-    try outputFile.writeAll(decompressedCharList.items);
+    try outputFile.writeAll(decompressedCharList.items); //todo do partial writes
 }
 fn printCharList(list: *std.ArrayList(u8)) void {
     for (list.items) |item| {
@@ -352,7 +382,7 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
             const headerBytes = try readCompressedFileHeader(allocator, inputFile);
             var freqMap = try deserializeFrequencyMap(allocator, headerBytes);
             defer freqMap.deinit();
-            //read the remainder (last byte)
+            //read the remainder (last byte) todo
             //build HuffmanTree
             var ht = try HuffmanTree.init(allocator, &freqMap);
             defer ht.deinit();
