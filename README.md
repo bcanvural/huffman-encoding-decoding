@@ -21,7 +21,10 @@ zig build
 After building, you can run the project using:
 
 ```bash
+#compress:
 zig build run -- -c inputfilename outputfilename
+#decompress:
+zig build run -- -d inputfilename outputfilename #where intputfilename is the outputfilename of the previous command
 ```
 
 -c for compression, -d for decompression
