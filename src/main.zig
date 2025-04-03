@@ -216,12 +216,10 @@ fn decompress(
     defer decompressedCharList.deinit();
     try moveFileCursorToEndOfHeader(inputFile);
     const lastProcessedBitCount = bitChToUsize(try inputFile.reader().readByte());
-    print("lastProcessedBitCount: {d}\n", .{lastProcessedBitCount});
     const contentSize = (try inputFile.metadata()).size() - (try inputFile.getPos());
     var totalRead: u64 = 0;
     var lastRound = false;
 
-    print("contentSize: {d}\n", .{contentSize});
     while (!lastRound) {
         var fileCharBuf: [4096]u8 = undefined;
         const readCount = try inputFile.read(&fileCharBuf);
@@ -234,33 +232,26 @@ fn decompress(
             fileCharsToBeProcessed -= 1; //skipping last byte in case this is last round
         }
         for (fileCharBuf[0..fileCharsToBeProcessed]) |fileChar| {
-            print("inside for\n", .{});
+            print("fileChar: 0x{X}\n", .{fileChar});
             try charToBitChars(fileChar, &encodingsList);
         }
         //attempt to find the decompressed chars (we may not every time, but that's ok)
         while (try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedCharList)) {}
+
         if (lastRound) {
-            //TODO big finding: we got to use encodingslist from above too! it got some leftovers
-            print("Last round!\n", .{});
-            //handle special case with "lastProcessedBitCount"
-            //setup
+            //handling special case with "lastProcessedBitCount"
             var lastBitCharslist = std.ArrayList(u8).init(allocator);
             defer lastBitCharslist.deinit(); //will hold all bits of last unprocessed byte (includes the ones we don't actually want)
-            //start
             const lastFileByte = fileCharBuf[fileCharsToBeProcessed];
             try charToBitChars(lastFileByte, &lastBitCharslist);
-            const lastEncodingsToConsider = lastBitCharslist.items[0..lastProcessedBitCount];
+            const lastEncodingsToConsider = lastBitCharslist.items[0..lastProcessedBitCount]; //contains only the encodings that we are interested in
             for (lastEncodingsToConsider) |encoding| {
                 try encodingsList.append(encoding);
             }
             while (try attemptFindLeafNodeCharFromEncodingBits(ht, &encodingsList, &decompressedCharList)) {}
-            print("lastround done\n", .{});
         }
     }
-
     try outputFile.writeAll(decompressedCharList.items); //todo do partial writes
-    print("Decompressed char count: {d}\n", .{decompressedCharList.items.len});
-    printCharList(&decompressedCharList);
 }
 
 test "compress" {
@@ -373,13 +364,7 @@ fn attemptFindLeafNodeCharFromEncodingBits(ht: HuffmanTree, encodingsList: *std.
     if (current.* == .leafNode) {
         const decompressed = current.*.leafNode.charValue;
         try decompressedCharList.append(decompressed);
-        if (idx != encodingsList.items.len - 1) {
-            //there are still unprocessed items, let's move them to the beginning
-            shiftNthAndForwardsToBeginning(encodingsList, idx);
-        } else {
-            //we processed everything, just shrink to 0
-            encodingsList.shrinkRetainingCapacity(0);
-        }
+        shiftNthAndForwardsToBeginning(encodingsList, idx);
         leafNodeFound = true;
     }
     return leafNodeFound;
@@ -414,18 +399,16 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
             try compress(allocator, ht, inputFile, outputFile);
         },
         Operation.Decompression => {
-            //deserializeFrequencyMap
             const inputFile = try openFile(config.inputFileName, .{ .mode = .read_only });
             defer inputFile.close();
 
             const headerBytes = try readCompressedFileHeader(allocator, inputFile);
             var freqMap = try deserializeFrequencyMap(allocator, headerBytes);
             defer freqMap.deinit();
-            //read the remainder (last byte) todo
-            //build HuffmanTree
+
             var ht = try HuffmanTree.init(allocator, &freqMap);
             defer ht.deinit();
-            //
+
             const outputFile = openFile(config.outputFileName, .{ .mode = .read_write }) catch |err| switch (err) {
                 fs.File.OpenError.FileNotFound => try fs.cwd().createFile(config.outputFileName, .{}),
                 else => return err,
