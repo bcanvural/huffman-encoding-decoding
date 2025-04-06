@@ -53,6 +53,7 @@ fn deserializeFrequencyMap(allocator: mem.Allocator, bytes: []u8) !FreqMap {
             testvar = bytes[subIdx];
         }
         const keyByte = bytes[idx];
+        print("idx is: {d}, subIdx is: {d}\n", .{idx, subIdx});
         const valueBytes = bytes[(idx + 1)..subIdx];
         const value = try std.fmt.parseInt(u32, valueBytes, 10);
         try freqmap.put(keyByte, value);
@@ -202,6 +203,50 @@ test "moveFileCursorToEndOfHeader" {
     try moveFileCursorToEndOfHeader(testFile);
     const aByte = try testFile.reader().readByte();
     try std.testing.expectEqual(@as(u8, '6'), aByte);
+}
+
+//returns a caller managed []u8 output
+fn runCmd(allocator: mem.Allocator, cmd: []const []const u8) ![]u8 {
+    var process = std.process.Child.init(cmd, allocator);
+    process.stdout_behavior = .Pipe;
+    try process.spawn();
+
+    var stdout = process.stdout.?;
+    var reader = stdout.reader();
+    const output = try reader.readAllAlloc(allocator, std.math.maxInt(usize));
+
+    print("Captured output: {s}\n", .{output});
+
+    const exit_status = try process.wait();
+    switch (exit_status) {
+        .Exited => print("Command executed successfully.\n", .{}),
+        else => print("command failed with status: {}\n", .{exit_status}),
+    }
+    return output;
+}
+
+test "e2e" {
+    //compile code
+    //compress test file
+    //decompres compressed file
+    //compare hashes
+    const allocator = std.testing.allocator;
+    const compileCmd = &[_][]const u8{ "zig", "build" };
+    const compileOutput = try runCmd(allocator, compileCmd);
+    defer allocator.free(compileOutput);
+
+    const binaryPath = "./zig-out/bin/huffman-encoding-decoding";
+    const inputFilePath = "tests/book.txt";
+    const compressedPath = "bookcompressed";
+    const decompressedPath = "bookdecompressed";
+
+    const compressCmd = &[_][]const u8{ binaryPath, "-c", inputFilePath, compressedPath };
+    const compressCmdOutput = try runCmd(allocator, compressCmd);
+    defer allocator.free(compressCmdOutput);
+
+    const decompressCmd = &[_][]const u8{ binaryPath, "-d", compressedPath, decompressedPath };
+    const decompressCmdOutput = try runCmd(allocator, decompressCmd);
+    defer allocator.free(decompressCmdOutput);
 }
 
 fn decompress(
