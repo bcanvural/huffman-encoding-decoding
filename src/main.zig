@@ -12,8 +12,74 @@ const Node = @import("types.zig").Node;
 const MAX_FILE_SIZE: usize = 100000000;
 const HEADER_DELIMITER: u8 = '#'; //we will write this twice after FreqMap to know freqmap ended.
 
-//Format: [1byte key][up to 10 byte value][;][1byte key][up to 10 byte value][;]...
-// 10 byte because 2^32 has 10 digits
+fn serializeFreqMapV2(freqMap: *FreqMap, outputFile: fs.File) !void {
+    var it = freqMap.iterator();
+    const countBuffer: [1]u8 = [1]u8{@intCast(freqMap.count())};
+    try outputFile.writeAll(&countBuffer);
+    while (it.next()) |entry| {
+        const keyBuffer: [1]u8 = [1]u8{entry.key_ptr.*};
+        try outputFile.writeAll(&keyBuffer);
+        var buffer: [4]u8 = undefined;
+        mem.writeInt(u32, &buffer, entry.value_ptr.*, .big);
+        try outputFile.writeAll(&buffer);
+    }
+    _ = try outputFile.write(&[_]u8{ HEADER_DELIMITER, HEADER_DELIMITER }); //writing twice
+}
+
+fn deserializeFreqMapV2(allocator: mem.Allocator, bytes: []u8) !FreqMap {
+    var freqMap = FreqMap.init(allocator);
+    if (bytes.len == 0) {
+        return HuffmanError.FileHeaderParseError;
+    }
+    const mapCount = @as(u32, bytes[0]);
+    print("map count is: {d}\n", .{mapCount});
+    var idx: usize = 1;
+    while (idx < bytes.len) : (idx += 5) {
+        const key = bytes[idx];
+        const value = mem.readInt(u32, bytes[idx + 1 .. idx + 5][0..4], .big);
+        try freqMap.put(key, value);
+    }
+    return freqMap;
+}
+
+//todo freqmap key order may not be the same as the input byte order
+test "serialize/deserialize freqmap v2" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{ 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'c', 'b', 'b' };
+    var freqMap = FreqMap.init(allocator);
+    try buildFrequencyMap(&freqMap, &bytes);
+    defer freqMap.deinit();
+    const outputFileName = "serializeFreqMapTestv2";
+    const outputFile = try fs.cwd().createFile(outputFileName, .{
+        .read = true,
+    });
+    defer outputFile.close();
+    try serializeFreqMapV2(&freqMap, outputFile);
+    const raw_bytes = try readCompressedFileHeader(allocator, outputFile);
+    defer allocator.free(raw_bytes);
+    // const expected_bytes = [_]u8{ 0x03, 0x61, 0x00, 0x00, 0x00, 0x0A, 0x63, 0x00, 0x00, 0x00, 0x01, 0x62, 0x00, 0x00, 0x00, 0x02 };
+    // try std.testing.expectEqual(expected_bytes.len, raw_bytes.len);
+    // for (0..expected_bytes.len) |idx| {
+    //     try std.testing.expectEqual(expected_bytes[idx], raw_bytes[idx]);
+    // }
+    var deserializedFreqMap = try deserializeFreqMapV2(allocator, raw_bytes);
+    defer deserializedFreqMap.deinit();
+
+    try std.testing.expectEqual(@as(u32, 2), deserializedFreqMap.get('b').?);
+    try std.testing.expectEqual(@as(u32, 10), deserializedFreqMap.get('a').?);
+    try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('c').?);
+}
+
+test "writeIntTest" {
+    var buffer: [4]u8 = undefined;
+    const value: u32 = 0xFFFF0000;
+    mem.writeInt(u32, &buffer, value, .big);
+    const expected = [_]u8{ 0xFF, 0xFF, 0x00, 0x00 };
+    try std.testing.expectEqualSlices(u8, &expected, &buffer);
+    print("{s}\n", .{buffer});
+}
+
+//TODO: ';' clashes with content. new format: [how many items freqmap has, in 1 byte][1byte key][4 byte value (always 4)]
 fn serializeFreqMap(freqMap: *FreqMap, outputFile: fs.File) !void {
     var it = freqMap.iterator();
     while (it.next()) |entry| {
@@ -27,11 +93,48 @@ fn serializeFreqMap(freqMap: *FreqMap, outputFile: fs.File) !void {
 }
 
 //returned bytes are owned by the caller, need to be freed with the same allocator
+// Reads and returns the header section that precedes the compressed payload.
+//
+// The header is terminated by the *two* consecutive HEADER_DELIMITER bytes ("##").
+// A single '#' byte can legitimately appear inside the header itself – for
+// instance when the frequency-map count equals the ASCII value for '#', or when
+// one of the keys or the big-endian frequency bytes coincide with it.  Therefore
+// we must look for the *sequence* "##" instead of the first occurrence of '#'.
+//
+// Returned slice is owned by the caller and must be freed with the same
+// allocator that was supplied.
 fn readCompressedFileHeader(allocator: mem.Allocator, inputFile: fs.File) ![]u8 {
     try inputFile.seekTo(0);
-    var charList = std.ArrayList(u8).init(allocator);
-    try inputFile.reader().readUntilDelimiterArrayList(&charList, HEADER_DELIMITER, 1024);
-    return try charList.toOwnedSlice();
+
+    var char_list = std.ArrayList(u8).init(allocator);
+
+    var reader = inputFile.reader();
+    var prev_was_hash = false;
+    while (true) {
+        const byte_opt = reader.readByte() catch |err| switch (err) {
+            error.EndOfStream => return HuffmanError.FileHeaderParseError,
+            else => return err,
+        };
+        const byte = byte_opt;
+
+        if (prev_was_hash) {
+            if (byte == HEADER_DELIMITER) {
+                // We have just seen the "##" sentinel. The previous byte that we
+                // already stored in the list is part of the sentinel, so remove
+                // it.
+                _ = char_list.pop();
+                break;
+            } else {
+                prev_was_hash = (byte == HEADER_DELIMITER);
+                try char_list.append(byte);
+            }
+        } else {
+            try char_list.append(byte);
+            prev_was_hash = (byte == HEADER_DELIMITER);
+        }
+    }
+
+    return try char_list.toOwnedSlice();
 }
 
 //parses the word frequency map from a previously compressed file
@@ -53,7 +156,7 @@ fn deserializeFrequencyMap(allocator: mem.Allocator, bytes: []u8) !FreqMap {
             testvar = bytes[subIdx];
         }
         const keyByte = bytes[idx];
-        print("idx is: {d}, subIdx is: {d}\n", .{idx, subIdx});
+        print("idx is: {d}, subIdx is: {d}\n", .{ idx, subIdx });
         const valueBytes = bytes[(idx + 1)..subIdx];
         const value = try std.fmt.parseInt(u32, valueBytes, 10);
         try freqmap.put(keyByte, value);
@@ -62,6 +165,7 @@ fn deserializeFrequencyMap(allocator: mem.Allocator, bytes: []u8) !FreqMap {
     return freqmap;
 }
 
+//todo debug compress is not writing properly in e2e
 fn compress(
     allocator: mem.Allocator,
     ht: HuffmanTree,
@@ -69,6 +173,7 @@ fn compress(
     outputFile: fs.File,
 ) !void {
     try outputFile.seekFromEnd(0);
+    try inputFile.seekTo(0);
     var compressedList = std.ArrayList(u8).init(allocator); //we collect compressed chars here
     defer compressedList.deinit();
     var encodingsList = std.ArrayList(u8).init(allocator);
@@ -177,11 +282,11 @@ fn charToBitChars(ch: u8, outEncodingList: *std.ArrayList(u8)) !void {
 
 fn moveFileCursorToEndOfHeader(file: fs.File) !void {
     try file.seekTo(0);
-    var buf: [1024]u8 = undefined;
+    var buf: [4096]u8 = undefined;
     //header ends with 2 HEADER_DELIMITER chars.
     //TODO make below more resillient to delimiter not existing
     while (true) {
-        _ = try file.reader().readUntilDelimiter(&buf, HEADER_DELIMITER);
+        _ = try file.reader().readUntilDelimiterOrEof(&buf, HEADER_DELIMITER);
         //read 1 more, that one should also be HEADER_DELIMITER
         const anotherLimiter = try file.reader().readByte();
         if (anotherLimiter == HEADER_DELIMITER) {
@@ -225,6 +330,7 @@ fn runCmd(allocator: mem.Allocator, cmd: []const []const u8) ![]u8 {
     return output;
 }
 
+//debug - taking long time
 test "e2e" {
     //compile code
     //compress test file
@@ -262,6 +368,7 @@ fn decompress(
     try moveFileCursorToEndOfHeader(inputFile);
     const lastProcessedBitCount = bitChToUsize(try inputFile.reader().readByte());
     const contentSize = (try inputFile.metadata()).size() - (try inputFile.getPos());
+    print("contentsize: {d}\n", .{contentSize});
     var totalRead: u64 = 0;
     var lastRound = false;
 
@@ -277,7 +384,6 @@ fn decompress(
             fileCharsToBeProcessed -= 1; //skipping last byte in case this is last round
         }
         for (fileCharBuf[0..fileCharsToBeProcessed]) |fileChar| {
-            print("fileChar: 0x{X}\n", .{fileChar});
             try charToBitChars(fileChar, &encodingsList);
         }
         //attempt to find the decompressed chars (we may not every time, but that's ok)
@@ -319,7 +425,7 @@ test "compress" {
     const outputFile = try fs.cwd().createFile("compresstestoutput", .{ .read = true });
     //will use the outputfile later so won't defer close it for now
 
-    try serializeFreqMap(&freqMap, outputFile);
+    try serializeFreqMapV2(&freqMap, outputFile);
 
     try compress(allocator, ht, inputFile, outputFile);
 
@@ -327,7 +433,7 @@ test "compress" {
     defer allocator.free(header);
     print("{s}\n", .{header});
 
-    var deserializedFreqMap = try deserializeFrequencyMap(allocator, header);
+    var deserializedFreqMap = try deserializeFreqMapV2(allocator, header);
     defer deserializedFreqMap.deinit();
     try std.testing.expectEqual(@as(u32, 10), deserializedFreqMap.get('a').?);
     try std.testing.expectEqual(@as(u32, 1), deserializedFreqMap.get('c').?);
@@ -407,6 +513,7 @@ fn attemptFindLeafNodeCharFromEncodingBits(ht: HuffmanTree, encodingsList: *std.
         }
     }
     if (current.* == .leafNode) {
+        //TODO cache the results in a map
         const decompressed = current.*.leafNode.charValue;
         try decompressedCharList.append(decompressed);
         shiftNthAndForwardsToBeginning(encodingsList, idx);
@@ -440,7 +547,7 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
             }); //TODO support local and absolute file paths
             defer outputFile.close();
 
-            try serializeFreqMap(&freqMap, outputFile);
+            try serializeFreqMapV2(&freqMap, outputFile);
             try compress(allocator, ht, inputFile, outputFile);
         },
         Operation.Decompression => {
@@ -448,7 +555,9 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
             defer inputFile.close();
 
             const headerBytes = try readCompressedFileHeader(allocator, inputFile);
-            var freqMap = try deserializeFrequencyMap(allocator, headerBytes);
+            defer allocator.free(headerBytes);
+            print("headerbytes len in decompress: {d}\n", .{headerBytes.len});
+            var freqMap = try deserializeFreqMapV2(allocator, headerBytes);
             defer freqMap.deinit();
 
             var ht = try HuffmanTree.init(allocator, &freqMap);
@@ -463,6 +572,19 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
         },
     }
 }
+
+// test "handleCommand/compression" {
+//     const allocator = std.testing.allocator;
+//     const compressInput = "tests/compresstest2.txt";
+//     const compressOutput = "testCompressed";
+//     const compressConfig = Config{ .operation = .Compression, .inputFileName = compressInput, .outputFileName = compressOutput };
+//     try handleCommand(allocator, compressConfig);
+//
+//     const decompressOutput = "testDecompressed";
+//     const decompressConfig = Config{ .operation = .Decompression, .inputFileName = compressOutput, .outputFileName = decompressOutput };
+//     try handleCommand(allocator, decompressConfig);
+// }
+
 //Processes passed in bytes, updates frequency info in caller-managed word frequency map
 fn buildFrequencyMap(freqMap: *FreqMap, bytes: []u8) !void {
     for (bytes) |ch| {
@@ -486,7 +608,7 @@ fn openFile(filename: []const u8, flags: fs.File.OpenFlags) !fs.File {
 pub const Operation = enum {
     Compression,
     Decompression,
-    pub fn toStr(self: Operation) []const u8 {
+    pub fn toStr(self: @This()) []const u8 {
         switch (self) {
             Operation.Compression => return "Compression",
             Operation.Decompression => return "Decompression",

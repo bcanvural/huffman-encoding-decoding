@@ -2,6 +2,8 @@ const std = @import("std");
 const print = std.debug.print;
 const mem = std.mem;
 
+// no-op comparator kept for possible future use; currently unused.
+
 pub const HuffmanError = error{
     EmptyBytes,
     EmptyHeap,
@@ -13,6 +15,18 @@ pub const HuffmanError = error{
     InvalidOperationError,
     MaxTreeDepthExceeded,
     ByteUnaccountedFor,
+};
+
+// We need deterministic iteration order for Huffman tie-breaking.  Using
+// ArrayHashMap guarantees that items are yielded in insertion order.
+const ByteContext = struct {
+    pub fn hash(_: @This(), key: u8) u32 {
+        // Perfect hash for single byte key.
+        return @as(u32, key);
+    }
+    pub fn eql(_: @This(), a: u8, b: u8, _: usize) bool {
+        return a == b;
+    }
 };
 
 pub const FreqMap = std.AutoHashMap(u8, u32);
@@ -128,7 +142,7 @@ pub const Heap = struct {
         var idx: usize = 0;
         while (it.next()) |entry| : (idx += 1) {
             nodes[idx] = Node{ .leafNode = .{ .charValue = entry.key_ptr.*, .freq = entry.value_ptr.* } };
-            try pq.add(&nodes[idx]); //we write the address of the array elemment, array is what survives!
+            try pq.add(&nodes[idx]);
         }
         return Heap{
             .pq = pq,
@@ -292,7 +306,7 @@ test "nodetest" {
 
 test "heaptest" {
     const allocator = std.testing.allocator;
-    var freqMap = std.AutoHashMap(u8, u32).init(allocator);
+    var freqMap = FreqMap.init(allocator);
     defer freqMap.deinit();
     try freqMap.put('A', 69);
     try freqMap.put('B', 10);
