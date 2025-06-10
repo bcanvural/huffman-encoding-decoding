@@ -573,17 +573,17 @@ fn handleCommand(allocator: mem.Allocator, config: Config) !void {
     }
 }
 
-// test "handleCommand/compression" {
-//     const allocator = std.testing.allocator;
-//     const compressInput = "tests/compresstest2.txt";
-//     const compressOutput = "testCompressed";
-//     const compressConfig = Config{ .operation = .Compression, .inputFileName = compressInput, .outputFileName = compressOutput };
-//     try handleCommand(allocator, compressConfig);
-//
-//     const decompressOutput = "testDecompressed";
-//     const decompressConfig = Config{ .operation = .Decompression, .inputFileName = compressOutput, .outputFileName = decompressOutput };
-//     try handleCommand(allocator, decompressConfig);
-// }
+test "handleCommand/compression" {
+    const allocator = std.testing.allocator;
+    const compressInput = "tests/compresstest2.txt";
+    const compressOutput = "testCompressed";
+    const compressConfig = Config{ .operation = .Compression, .inputFileName = compressInput, .outputFileName = compressOutput };
+    try handleCommand(allocator, compressConfig);
+
+    const decompressOutput = "testDecompressed";
+    const decompressConfig = Config{ .operation = .Decompression, .inputFileName = compressOutput, .outputFileName = decompressOutput };
+    try handleCommand(allocator, decompressConfig);
+}
 
 //Processes passed in bytes, updates frequency info in caller-managed word frequency map
 fn buildFrequencyMap(freqMap: *FreqMap, bytes: []u8) !void {
